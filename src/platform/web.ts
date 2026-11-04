@@ -1,7 +1,7 @@
 import { db } from '@/db/schema'
 import { getSetting, setSetting } from '@/db/repos/settings'
 import type { Platform } from './types'
-import { notImplemented } from './types'
+import { exportFormat, notImplemented } from './types'
 
 export const webPlatform: Platform = {
   kind: 'web',
@@ -39,11 +39,14 @@ export const webPlatform: Platform = {
     if (!row) throw new Error('找不到这本书的原文件')
     return row.bytes
   },
+  async hasBookFile(bookId) {
+    return (await db.bookFiles.get(bookId)) !== undefined
+  },
   async deleteBookFile(bookId) {
     await db.bookFiles.delete(bookId)
   },
   async exportTextFile(fileName, content) {
-    const blob = new Blob([content], { type: 'application/json' })
+    const blob = new Blob([content], { type: exportFormat(fileName).mime })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url

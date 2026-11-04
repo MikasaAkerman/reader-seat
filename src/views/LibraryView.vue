@@ -50,7 +50,8 @@ onMounted(() => {
 })
 
 async function importBook() {
-  const outcome = await store.importBook()
+  let outcome = await store.importBook()
+  if (outcome?.status === 'conflict') outcome = await store.resolveConflict(await askConflict(outcome.title))
   if (!outcome) {
     if (store.error) showToast(store.error)
     return
@@ -59,9 +60,25 @@ async function importBook() {
     await router.push({ name: 'book-setup', params: { bookId: outcome.bookId } })
     return
   }
+  if (outcome.status === 'conflict') return
   const text = outcome.status === 'updated' ? '已按新版本更新这本书' : '这本书已经在书架上'
   showToast(text)
   await router.push({ name: 'reader', params: { bookId: outcome.bookId } })
+}
+
+async function askConflict(title: string): Promise<'replace' | 'separate' | 'cancel'> {
+  try {
+    await showConfirmDialog({
+      title: '书架上已有同名的书',
+      message: `《${title}》已经在书架上，译者也相同。用新文件替换旧版本（评论和进度会尽量对到新版本上），还是作为另一本书导入？`,
+      confirmButtonText: '替换为新版本',
+      cancelButtonText: '作为另一本书',
+      showCancelButton: true,
+    })
+    return 'replace'
+  } catch (reason) {
+    return reason === 'cancel' ? 'separate' : 'cancel'
+  }
 }
 
 function openBook(bookId: string) {

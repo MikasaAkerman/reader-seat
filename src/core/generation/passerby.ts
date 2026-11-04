@@ -25,6 +25,7 @@ export async function runPasserbyBatch(
     temperature: 1.3,
     maxTokens: 800,
     timeoutMs: 60_000,
+    reasoning: 'off',
     signal,
   })
   return {

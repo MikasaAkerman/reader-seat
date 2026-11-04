@@ -99,17 +99,17 @@ describe('reading markdown', () => {
     expect(opening).toBe('灯灭了。他在巷口站住，看了很久很久才离开')
     expect(opening.length).toBeLessThanOrEqual(20)
     const quiet = buildReadingMarkdown({
-      title: '巷口的灯',
+      title: '巷口的灯：上 #1 "新版"',
       translator: '无',
       station: 1,
       exportedAt: '2026-11-04',
       chapters: [chapter],
       includeReplies: false,
     })
-    expect(quiet).toContain('book: 巷口的灯')
-    expect(quiet).toContain('translator: 无')
+    expect(quiet).toContain('book: "巷口的灯：上 #1 \\"新版\\""')
+    expect(quiet).toContain('translator: "无"')
     expect(quiet).toContain('station: 1')
-    expect(quiet).toContain('exported: 2026-11-04')
+    expect(quiet).toContain('exported: "2026-11-04"')
     expect(quiet).toContain('「灯灭了。」：这里暗')
     expect(quiet).toContain('我觉得他在等')
     expect(quiet).toContain('判断：他回头了')

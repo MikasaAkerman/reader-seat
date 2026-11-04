@@ -21,10 +21,9 @@ export const roughCommentSchema = z.object({
   author_type: authorTypeSchema,
   reader_role: z.string().optional(),
   display_name: z.string().optional(),
-  sampled_dims: z.array(z.string()).optional(),
   text: z.string(),
-  reaction_type: z.string().default(''),
-  stance: z.string().default(''),
+  reaction_type: z.string().optional(),
+  stance: z.string().optional(),
   uses_outside_plot: z.boolean().default(false),
 })
 
@@ -46,6 +45,11 @@ export const roughParagraphSchema = z.object({
 
 export const roughResultSchema = z.object({
   paragraphs: z.array(roughParagraphSchema),
+  new_entities: z.array(z.string()).default([]),
+})
+
+/** 流式粗评的一行：一段的结果，带上这一段首次出现的实体。 */
+export const roughLineSchema = roughParagraphSchema.extend({
   new_entities: z.array(z.string()).default([]),
 })
 
@@ -115,6 +119,7 @@ export const refineResultSchema = z.object({
 export type RoughComment = z.infer<typeof roughCommentSchema>
 export type RoughParagraph = z.infer<typeof roughParagraphSchema>
 export type RoughResult = z.infer<typeof roughResultSchema>
+export type RoughLine = z.infer<typeof roughLineSchema>
 export type RefineComment = z.infer<typeof refineCommentSchema>
 export type RefineThread = z.infer<typeof refineThreadSchema>
 export type MemoryUpdates = z.infer<typeof memoryUpdatesSchema>
@@ -174,6 +179,10 @@ export const chapterTalkResultSchema = z.object({
     (value) => keepObjects(value, predictionUpdateSchema),
     z.array(predictionUpdateSchema),
   ),
+  synopsis_update: z
+    .unknown()
+    .optional()
+    .transform((value) => (typeof value === 'string' ? value : '')),
   memory_updates: memoryUpdatesSchema.catch(emptyMemoryUpdates()),
 })
 

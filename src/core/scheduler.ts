@@ -5,10 +5,12 @@ export interface SchedulerTask {
   key: string
   distance: number
   run: (signal: AbortSignal) => Promise<void>
+  /** 走实时优先级、但读者再跳走就没用了的任务（跳读生成），dropPending 时一并清掉。 */
+  droppable?: boolean
 }
 
 const PRIORITY: Record<TaskKind, number> = { live: 0, rough: 1, refine: 2, chapterTalk: 3 }
-const LIMIT: Record<TaskKind, number> = { live: 1, rough: 1, refine: 2, chapterTalk: 1 }
+const DEFAULT_LIMIT: Record<TaskKind, number> = { live: 1, rough: 1, refine: 2, chapterTalk: 1 }
 
 interface Queued extends SchedulerTask {
   id: string
@@ -24,6 +26,19 @@ export class Scheduler {
   private running = new Map<string, AbortController>()
   private paused = false
   private timer: ReturnType<typeof setTimeout> | 0 = 0
+  private limit: Record<TaskKind, number> = { ...DEFAULT_LIMIT }
+
+  /** 冷启动时临时放宽粗评并发，缓冲够了再收回。 */
+  setLimit(kind: TaskKind, limit: number): void {
+    const next = Math.max(1, limit)
+    if (this.limit[kind] === next) return
+    this.limit[kind] = next
+    this.schedule()
+  }
+
+  limitOf(kind: TaskKind): number {
+    return this.limit[kind]
+  }
 
   enqueue(task: SchedulerTask): boolean {
     const id = `${task.kind}:${task.key}`
@@ -45,15 +60,17 @@ export class Scheduler {
     this.schedule()
   }
 
-  /** 清掉还没开始的粗生成和精修，返回这些任务对应的段落 id。正在跑的不中止。 */
+  /** 清掉还没开始的粗生成、精修和可丢弃任务，返回这些任务对应的段落 id。正在跑的不中止。 */
   dropPending(kinds: Array<'rough' | 'refine'> = ['rough', 'refine']): string[] {
-    const dropped = this.queued.filter((task) => kinds.includes(task.kind as 'rough' | 'refine'))
-    this.queued = this.queued.filter((task) => !kinds.includes(task.kind as 'rough' | 'refine'))
-    return dropped.flatMap((task) => (task.kind === 'rough' ? task.key.split(',') : [task.key]))
+    const drop = (task: Queued) => task.droppable === true || kinds.includes(task.kind as 'rough' | 'refine')
+    const dropped = this.queued.filter(drop)
+    this.queued = this.queued.filter((task) => !drop(task))
+    return dropped.flatMap((task) => task.key.split(','))
   }
 
   stop(): void {
     this.queued = []
+    this.limit = { ...DEFAULT_LIMIT }
     for (const abort of this.running.values()) abort.abort()
     this.running.clear()
     if (this.timer) {
@@ -78,7 +95,7 @@ export class Scheduler {
     if (this.paused) return
     for (const kind of ['live', 'rough', 'refine', 'chapterTalk'] as const) {
       let active = [...this.running.keys()].filter((id) => id.startsWith(`${kind}:`)).length
-      while (active < LIMIT[kind]) {
+      while (active < this.limit[kind]) {
         const index = this.queued.findIndex((task) => task.kind === kind)
         if (index < 0) break
         const task = this.queued.splice(index, 1)[0]

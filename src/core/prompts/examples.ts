@@ -5,36 +5,25 @@ export const ROUGH_JSON_EXAMPLE = `{
       "pid": "p3",
       "score": 2,
       "comments": [
-        {
-          "author_type": "resident",
-          "reader_role": "毒舌",
-          "text": "评论正文",
-          "reaction_type": "吐槽",
-          "stance": "质疑",
-          "uses_outside_plot": false
-        },
-        {
-          "author_type": "passerby",
-          "display_name": "路人昵称",
-          "sampled_dims": ["联想", "中立", "感性"],
-          "text": "评论正文",
-          "reaction_type": "联想",
-          "stance": "中立",
-          "uses_outside_plot": false
-        }
-      ],
-      "background_note": null,
-      "prediction_hits": []
+        { "author_type": "resident", "reader_role": "毒舌", "text": "评论正文" },
+        { "author_type": "passerby", "display_name": "路人昵称", "text": "评论正文" }
+      ]
     },
     {
       "pid": "p7",
       "score": 3,
-      "comments": [],
+      "comments": [{ "author_type": "resident", "reader_role": "头回读", "text": "占位短评" }],
       "prediction_hits": [{ "prediction_id": "pr_12", "result": "打脸" }]
     }
   ],
   "new_entities": ["首次出现的人名或地名"]
 }`
+
+export const ROUGH_JSONL_EXAMPLE = [
+  '{"pid":"p1","score":0,"comments":[]}',
+  '{"pid":"p2","score":2,"comments":[{"author_type":"resident","reader_role":"毒舌","text":"评论正文"},{"author_type":"passerby","display_name":"路人昵称","text":"评论正文"}],"new_entities":["本段首次出现的人名或地名"]}',
+  '{"pid":"p3","score":3,"comments":[{"author_type":"resident","reader_role":"头回读","text":"占位短评"}],"prediction_hits":[{"prediction_id":"pr_12","result":"打脸"}]}',
+].join('\n')
 
 export const REFINE_JSON_EXAMPLE = `{
   "pid": "p7",

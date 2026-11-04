@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import { inertElement } from './html'
 
 export type ParagraphKind = 'heading' | 'body'
 
@@ -32,13 +33,17 @@ function sanitize(html: string): string {
   })
 }
 
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+}
+
 interface Piece {
   text: string
   html: string
 }
 
 function pieceFrom(nodes: Node[]): Piece {
-  const holder = document.createElement('div')
+  const holder = inertElement()
   for (const node of nodes) holder.appendChild(node.cloneNode(true))
   const html = sanitize(holder.innerHTML)
   const text = (holder.textContent ?? '').replace(/\s+/g, ' ').trim()
@@ -69,7 +74,7 @@ function splitByBr(el: Element): Piece[] {
 
 function mergeImages(html: string, images: Element[], where: 'before' | 'after'): string {
   if (images.length === 0) return html
-  const holder = document.createElement('div')
+  const holder = inertElement()
   if (where === 'after') holder.insertAdjacentHTML('afterbegin', html)
   for (const image of images) holder.appendChild(image.cloneNode(true))
   if (where === 'before') holder.insertAdjacentHTML('beforeend', html)
@@ -84,7 +89,7 @@ export function extractParagraphs(xhtml: string): ExtractedParagraph[] {
 
   const pushPiece = (kind: ParagraphKind, piece: Piece) => {
     const text = piece.text
-    const holder = document.createElement('div')
+    const holder = inertElement()
     holder.innerHTML = piece.html
     const imageNodes = [...holder.querySelectorAll('img')]
     if (!text) {
@@ -112,7 +117,12 @@ export function extractParagraphs(xhtml: string): ExtractedParagraph[] {
     }
     if (BLOCKS.has(tag)) {
       const kind: ParagraphKind = isHeading(tag) ? 'heading' : 'body'
-      for (const piece of splitByBr(node)) pushPiece(kind, piece)
+      const pieces = splitByBr(node)
+      const id = node.getAttribute('id')
+      // 块本身的 id 是注释链接的目标，拆成段后留一个空锚点。
+      const first = pieces[0]
+      if (id && first) pieces[0] = { ...first, html: sanitize(`<span id="${escapeAttr(id)}"></span>`) + first.html }
+      for (const piece of pieces) pushPiece(kind, piece)
       return
     }
     for (const child of node.childNodes) walk(child)

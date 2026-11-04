@@ -15,9 +15,10 @@ export const spoilerCheckSchema = z.object({
 
 export type SpoilerCheck = z.infer<typeof spoilerCheckSchema>
 
-export function commentPasses(id: string, results: { id: string; pass: boolean }[]): boolean {
+/** 严格档位下，校验结果里漏掉的评论按不通过处理。 */
+export function commentPasses(id: string, results: { id: string; pass: boolean }[], strict = false): boolean {
   const found = results.find((item) => item.id === id)
-  return found ? found.pass : true
+  return found ? found.pass : !strict
 }
 
 export async function runSpoilerCheck(
@@ -29,6 +30,7 @@ export async function runSpoilerCheck(
     temperature: 0,
     maxTokens: 800,
     timeoutMs: 30_000,
+    reasoning: 'off',
     signal,
   })
   return { ...data, usage }

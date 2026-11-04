@@ -87,6 +87,7 @@ function addUsage(total: LlmUsage, part: LlmUsage) {
   total.promptTokens += part.promptTokens
   total.completionTokens += part.completionTokens
   total.cacheHitTokens += part.cacheHitTokens
+  total.reasoningTokens += part.reasoningTokens
 }
 
 function metering(client: LlmClient, total: LlmUsage): LlmClient {
@@ -106,7 +107,7 @@ export async function generatePhase0(
   client: LlmClient,
   meta: Phase0Meta,
 ): Promise<{ document: Phase0Document; memory: BookMemory }> {
-  const usage: LlmUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0 }
+  const usage: LlmUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, reasoningTokens: 0 }
   const metered = metering(client, usage)
   const pricing = meta.pricing ?? DEFAULT_PRICING
   const paragraphs = splitParagraphs(source)

@@ -1,4 +1,5 @@
 import { buildBackup, parseBackup } from '@/core/export'
+import { platform } from '@/platform'
 import { db, type SettingsRow } from '../schema'
 
 const TABLES = [
@@ -50,7 +51,7 @@ export async function restoreBackup(json: string): Promise<void> {
   })
   const books = await db.books.toArray()
   for (const book of books) {
-    const file = await db.bookFiles.get(book.id)
-    await db.books.update(book.id, { fileMissing: !file })
+    const present = await platform.hasBookFile(book.id).catch(() => false)
+    await db.books.update(book.id, { fileMissing: !present })
   }
 }

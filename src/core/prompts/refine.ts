@@ -2,13 +2,14 @@ import type { ChatMessage } from '../llm/types'
 import { fullLineup } from '../personas'
 import { PROMPT_VERSION, SHARED_CONSTRAINTS } from './constraints'
 import { REFINE_JSON_EXAMPLE } from './examples'
+import { bookInfo } from './rough'
 
 export interface RefinePromptContext {
   title: string
   spoilerLevel: string
   memorySnapshot: string
   priorSummary: string
-  /** 从块首到该热段（含）的编号文本 */
+  /** 本章开头（超长时取末尾一截）到该热段（含）的编号文本 */
   textUntilHot: string
   pid: string
   hotReason: string
@@ -33,15 +34,15 @@ export function buildRefinePrompt(ctx: RefinePromptContext): ChatMessage[] {
         REFINE_JSON_EXAMPLE,
       ].join('\n'),
     },
-    { role: 'user', content: `书友设定（完整）\n${ctx.lineupText || fullLineup()}\n\n动态状态\n${ctx.residentState || '（无）'}` },
-    { role: 'user', content: `书圈记忆\n${ctx.memorySnapshot || '（空）'}` },
+    { role: 'user', content: `书友设定（完整）\n${ctx.lineupText || fullLineup()}` },
+    { role: 'user', content: `书籍信息\n${bookInfo(ctx)}\n\n前文摘要\n${ctx.priorSummary || '（无）'}` },
     {
       role: 'user',
-      content: `前文摘要\n${ctx.priorSummary || '（无）'}\n书名：${ctx.title}\n防剧透：${ctx.spoilerLevel}`,
+      content: `书圈记忆\n${ctx.memorySnapshot || '（空）'}\n\n书友动态状态\n${ctx.residentState || '（无）'}`,
     },
     {
       role: 'user',
-      content: `热段 ${ctx.pid}。被评为热段的原因：${ctx.hotReason}\n用户口味示例：${ctx.tasteExamples || '（无）'}\n\n文本（只到该段）\n${ctx.textUntilHot}`,
+      content: `文本（只到该段）\n${ctx.textUntilHot}\n\n热段 ${ctx.pid}。被评为热段的原因：${ctx.hotReason}\n用户口味示例：${ctx.tasteExamples || '（无）'}`,
     },
   ]
 }

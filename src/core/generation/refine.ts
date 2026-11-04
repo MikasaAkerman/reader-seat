@@ -33,6 +33,7 @@ export async function runRefine(
     temperature: 1.3,
     maxTokens: 2000,
     timeoutMs: 60_000,
+    reasoning: 'off',
     signal,
   })
   const index = pidToIndex(data.pid)

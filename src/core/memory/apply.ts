@@ -14,6 +14,14 @@ export function emptyMemory(bookId = 'phase0'): BookMemory {
   }
 }
 
+/** 预测 id 进 prompt，要短；删掉旧预测后也不能和留下的撞号。 */
+export function predictionId(taken: ReadonlySet<string>): string {
+  for (;;) {
+    const id = `pr_${Math.random().toString(36).slice(2, 7)}`
+    if (!taken.has(id)) return id
+  }
+}
+
 export function applyMemoryUpdates(
   memory: BookMemory,
   updates: MemoryUpdates,
@@ -32,7 +40,7 @@ export function applyMemoryUpdates(
     const exists = predictions.some((p) => p.by === item.by && p.content === item.content)
     if (!exists) {
       predictions.push({
-        id: `pr_${predictions.length + 1}`,
+        id: predictionId(new Set(predictions.map((p) => p.id))),
         by: item.by,
         content: item.content,
         status: '待验证',
@@ -77,8 +85,9 @@ export function resolvePredictions(
   return predictions.map((prediction) => {
     const hit = hits.find((item) => item.prediction_id === prediction.id)
     if (!hit) return prediction
-    if (/打脸|推翻|说错/.test(hit.result)) return { ...prediction, status: '打脸' }
-    if (/应验|成立|说中/.test(hit.result)) return { ...prediction, status: '应验' }
+    const result = hit.result
+    if (/打脸|推翻|说错|落空|(未|没有?|不)(能|曾)?(应验|成立|说中)/.test(result)) return { ...prediction, status: '打脸' }
+    if (/应验|成立|说中/.test(result)) return { ...prediction, status: '应验' }
     return prediction
   })
 }
@@ -92,24 +101,40 @@ export function mergeChapterSummary(existing: string | undefined, summary: strin
   return next
 }
 
+export const SYNOPSIS_MAX_CHARS = 800
+
+export function mergeSynopsis(previous: string, next: string): string {
+  const text = next.trim()
+  if (!text) return previous
+  return text.slice(0, SYNOPSIS_MAX_CHARS)
+}
+
+/**
+ * 前情 = 全书梗概 + 最近 3 章摘要。还没有梗概时，更早的章节每章取开头一句垫着。
+ */
 export function priorSummaryFrom(
   chapters: { order: number; summary?: string }[],
   beforeOrder: number,
+  synopsis = '',
 ): string {
   const ready = chapters
     .filter((chapter) => chapter.order < beforeOrder && chapter.summary?.trim())
     .sort((a, b) => a.order - b.order)
-  if (ready.length === 0) return ''
-  const recent = ready.slice(-3)
-  const older = ready.slice(0, -3).map((chapter) => chapter.summary?.trim() ?? '').join('')
-  return [older ? older.slice(0, 200) : '', recent.map((chapter) => chapter.summary?.trim() ?? '').join('\n')]
-    .filter(Boolean)
-    .join('\n')
+  const recent = ready.slice(-3).map((chapter) => chapter.summary?.trim() ?? '')
+  const head = synopsis.trim()
+    ? `全书梗概：${synopsis.trim()}`
+    : ready
+        .slice(0, -3)
+        .map((chapter) => (chapter.summary?.trim() ?? '').slice(0, 40))
+        .join('；')
+        .slice(-400)
+  return [head, recent.join('\n')].filter(Boolean).join('\n')
 }
+
+const SNAPSHOT_NICKNAMES = 20
 
 export function snapshotForPrompt(memory: BookMemory, budgetChars = 1500): string {
   const sections = [
-    ['外号', memory.nicknames.map((item) => `${item.character}=${item.nickname}（${item.by}）`).join('；')],
     [
       '待验证预测',
       memory.predictions
@@ -117,10 +142,17 @@ export function snapshotForPrompt(memory: BookMemory, budgetChars = 1500): strin
         .map((item) => `${item.id} ${item.by}：${item.content}`)
         .join('；'),
     ],
-    ['争议', memory.debates.map((item) => item.topic).join('；')],
-    ['名场面', memory.scenes.map((item) => item.label).join('；')],
     ['书友状态', memory.stances.map((item) => `${item.role}：${item.stance}`).join('；')],
     ['我的立场', memory.userStance.join('；')],
+    [
+      '外号',
+      memory.nicknames
+        .slice(-SNAPSHOT_NICKNAMES)
+        .map((item) => `${item.character}=${item.nickname}（${item.by}）`)
+        .join('；'),
+    ],
+    ['争议', memory.debates.map((item) => item.topic).join('；')],
+    ['名场面', memory.scenes.map((item) => item.label).join('；')],
   ]
   let text = ''
   for (const [title, body] of sections) {

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { assignGeneration, lineupFor, planNextBlock, readyAhead } from '@/core/generation/pipeline'
+import {
+  assignGeneration,
+  assignOne,
+  COLD_BLOCK_PARAS,
+  JUMP_BLOCK_PARAS,
+  jumpBlock,
+  lineupFor,
+  planNextBlock,
+  readyAhead,
+} from '@/core/generation/pipeline'
 import type { RoughParagraph } from '@/core/generation/schema'
 import type { ParagraphRow } from '@/db/schema'
 import { bubbleFor } from '@/db/repos/comments'
@@ -18,7 +27,7 @@ function row(
     text,
     html: `<p>${text}</p>`,
     textHash: String(order),
-    kind: 'paragraph',
+    kind: 'body',
     genStatus: 'none',
     ...extra,
   }
@@ -97,10 +106,35 @@ describe('assignGeneration', () => {
       generated('p4', 3, '热三'),
     ])
     expect(assigned[0]).toMatchObject({ score: 0, hot: false, genStatus: 'rough', comments: [] })
-    expect(assigned[1]).toMatchObject({ score: 3, hot: true, genStatus: 'refining', comments: [] })
+    expect(assigned[1]).toMatchObject({ score: 3, hot: true, genStatus: 'refining', reason: '粗评分为 3' })
+    expect(assigned[1]?.comments.map((c) => c.text)).toEqual(['热一'])
     expect(assigned[2]).toMatchObject({ score: 3, hot: true, genStatus: 'refining' })
-    expect(assigned[3]).toMatchObject({ score: 2, hot: false, genStatus: 'rough' })
+    expect(assigned[3]).toMatchObject({ score: 2, hot: false, genStatus: 'rough', reason: '' })
     expect(assigned[3]?.comments[0]?.displayName).toBe('考据癖')
+  })
+
+  it('treats a prediction hit as hot and says why', () => {
+    const hit = { ...generated('p1', 1), prediction_hits: [{ prediction_id: 'pr_ab12c', result: '应验' }] }
+    const assigned = assignOne(row(1), hit, 0)
+    expect(assigned).toMatchObject({ score: 3, hot: true, genStatus: 'refining' })
+    expect(assigned.reason).toContain('pr_ab12c')
+  })
+})
+
+describe('jumpBlock and cold start', () => {
+  it('takes the current paragraph and a few after it, stopping at generated ones', () => {
+    const rows = Array.from({ length: 10 }, (_, index) => row(index + 1))
+    expect(jumpBlock(rows, 3, new Set()).map((item) => item.order)).toEqual(
+      Array.from({ length: JUMP_BLOCK_PARAS }, (_, index) => index + 3),
+    )
+    rows[4]!.genStatus = 'rough'
+    expect(jumpBlock(rows, 3, new Set()).map((item) => item.order)).toEqual([3, 4])
+    expect(jumpBlock(rows, 3, new Set(['p3']))).toEqual([])
+  })
+
+  it('caps the first block after entering a chapter', () => {
+    const rows = Array.from({ length: 16 }, (_, index) => row(index + 1))
+    expect(planNextBlock(rows, 1, new Set(), COLD_BLOCK_PARAS)).toHaveLength(COLD_BLOCK_PARAS)
   })
 })
 

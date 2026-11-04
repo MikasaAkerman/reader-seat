@@ -1,4 +1,4 @@
-import { parseEpub, relinkComments, type ParsedBook } from '@/core/epub'
+import { matchParagraphs, parseEpub, relinkComments, type ParagraphRef, type ParsedBook } from '@/core/epub'
 import { DEFAULT_LINEUP } from '@/core/personas'
 import type { SpoilerLevel, UnlockMode } from '@/core/types'
 import { platform } from '@/platform'
@@ -31,6 +31,7 @@ export type ImportOutcome =
   | { status: 'existing'; bookId: string }
   | { status: 'created'; bookId: string }
   | { status: 'updated'; bookId: string }
+  | { status: 'conflict'; bookId: string; title: string }
 
 export interface ProgressInput {
   chapterId: string
@@ -115,21 +116,54 @@ async function writeRows(bookId: string, parsed: ParsedBook, bytes: Uint8Array, 
   }
 }
 
+function paragraphRefs(chapters: ChapterRow[], paragraphs: ParagraphRow[]): ParagraphRef[] {
+  const href = new Map(chapters.map((chapter) => [chapter.id, chapter.href]))
+  return paragraphs.map((paragraph) => ({
+    id: paragraph.id,
+    chapterHref: href.get(paragraph.chapterId) ?? '',
+    order: paragraph.order,
+    textHash: paragraph.textHash,
+    text: paragraph.text,
+  }))
+}
+
+/** 新版本替换旧版本：段落按文本对应，评论、批、批注、本章说、章节摘要和阅读进度都跟过去。 */
 async function replaceEdition(book: BookRow, parsed: ParsedBook, bytes: Uint8Array) {
   const oldChapters = await db.chapters.where('bookId').equals(book.id).toArray()
   const oldParagraphs = await db.paragraphs.where('bookId').equals(book.id).toArray()
   const { chapters, paragraphs } = rowsFromParsed(book.id, parsed)
+  const matched = matchParagraphs(paragraphRefs(oldChapters, oldParagraphs), paragraphRefs(chapters, paragraphs))
+
+  const chapterMap = new Map<string, string>()
+  for (const old of oldChapters) {
+    const next = chapters.find((chapter) => chapter.href === old.href)
+    if (!next) continue
+    chapterMap.set(old.id, next.id)
+    if (old.summary) next.summary = old.summary
+    next.readStatus = old.readStatus
+  }
+  const newById = new Map(paragraphs.map((paragraph) => [paragraph.id, paragraph]))
+  for (const old of oldParagraphs) {
+    const next = newById.get(matched.get(old.id) ?? '')
+    if (!next) continue
+    next.genStatus = old.genStatus
+    if (old.score !== undefined) next.score = old.score
+    if (old.userMarked) next.userMarked = old.userMarked
+  }
+
   const oldIds = oldParagraphs.map((paragraph) => paragraph.id)
-  const comments = oldIds.length
-    ? await db.comments.where('paragraphId').anyOf(oldIds).toArray()
-    : []
-  const relinked = relinkComments(oldParagraphs, paragraphs, comments)
+  const comments = oldIds.length ? await db.comments.where('paragraphId').anyOf(oldIds).toArray() : []
+  const batches = oldIds.length ? await db.commentBatches.where('paragraphId').anyOf(oldIds).toArray() : []
+  const notes = await db.userNotes.where('bookId').equals(book.id).toArray()
+  const oldChapterIds = oldChapters.map((chapter) => chapter.id)
+  const talks = oldChapterIds.length ? await db.chapterTalks.where('chapterId').anyOf(oldChapterIds).toArray() : []
+  const relinked = relinkComments(matched, comments)
   const state = await db.readingStates.get(book.id)
-  const nextState = retargetState(state, oldChapters, oldParagraphs, chapters, paragraphs)
+  const nextState = retargetState(state, oldChapters, oldParagraphs, chapters, paragraphs, matched)
 
   await db.transaction(
     'rw',
-    [db.books, db.chapters, db.paragraphs, db.comments, db.readingStates],
+    [db.books, db.chapters, db.paragraphs, db.comments, db.commentBatches, db.userNotes, db.chapterTalks, db.readingStates],
     async () => {
       await db.paragraphs.where('bookId').equals(book.id).delete()
       await db.chapters.where('bookId').equals(book.id).delete()
@@ -141,10 +175,33 @@ async function replaceEdition(book: BookRow, parsed: ParsedBook, bytes: Uint8Arr
           mismatched: comment.mismatched,
         })
       }
+      for (const batch of batches) {
+        const paragraphId = matched.get(batch.paragraphId)
+        if (paragraphId) await db.commentBatches.update(batch.id, { paragraphId })
+      }
+      for (const note of notes) {
+        const paragraph = newById.get(matched.get(note.paragraphId) ?? '')
+        const chapterId = paragraph?.chapterId ?? chapterMap.get(note.chapterId)
+        if (!chapterId) continue
+        await db.userNotes.update(note.id, { chapterId, ...(paragraph ? { paragraphId: paragraph.id } : {}) })
+      }
+      for (const talk of talks) {
+        const chapterId = chapterMap.get(talk.chapterId)
+        if (!chapterId) continue
+        await db.chapterTalks.update(talk.id, {
+          chapterId,
+          paragraphId: matched.get(talk.paragraphId) ?? '',
+          hotParagraphIds: talk.hotParagraphIds.flatMap((id) => {
+            const next = matched.get(id)
+            return next ? [next] : []
+          }),
+        })
+      }
       await db.books.update(book.id, {
         author: parsed.author,
         translator: parsed.translator,
         fingerprint: parsed.fingerprint,
+        fileMissing: false,
         updatedAt: nowIso(),
       })
       if (nextState) await db.readingStates.put(nextState)
@@ -160,15 +217,26 @@ function retargetState(
   oldParagraphs: ParagraphRow[],
   chapters: ChapterRow[],
   paragraphs: ParagraphRow[],
+  matched: ReadonlyMap<string, string>,
 ): ReadingStateRow | null {
   if (!state) return null
+  const newById = new Map(paragraphs.map((paragraph) => [paragraph.id, paragraph]))
+  /** 这一段对不上时往前找最近一段对得上的。 */
+  const landing = (chapterId: string, order: number) => {
+    const candidates = oldParagraphs
+      .filter((paragraph) => paragraph.chapterId === chapterId && paragraph.order <= order)
+      .sort((a, b) => b.order - a.order)
+    for (const old of candidates) {
+      const next = newById.get(matched.get(old.id) ?? '')
+      if (next) return next
+    }
+    return undefined
+  }
   const oldChapter = oldChapters.find((chapter) => chapter.id === state.chapterId)
-  const oldParagraph = oldParagraphs.find(
+  const exact = oldParagraphs.find(
     (paragraph) => paragraph.chapterId === state.chapterId && paragraph.order === state.paragraphIndex,
   )
-  const nextParagraph = oldParagraph
-    ? paragraphs.find((paragraph) => paragraph.anchor === oldParagraph.anchor)
-    : undefined
+  const nextParagraph = landing(state.chapterId, state.paragraphIndex)
   const nextChapter =
     chapters.find((chapter) => chapter.id === nextParagraph?.chapterId) ??
     chapters.find((chapter) => chapter.href === oldChapter?.href)
@@ -177,23 +245,34 @@ function retargetState(
   for (const [oldId, order] of Object.entries(state.readUpTo)) {
     const href = oldChapters.find((chapter) => chapter.id === oldId)?.href
     const target = chapters.find((chapter) => chapter.href === href)
-    const oldAnchor = oldParagraphs.find(
-      (paragraph) => paragraph.chapterId === oldId && paragraph.order === order,
-    )?.anchor
-    const matched = paragraphs.find((paragraph) => paragraph.anchor === oldAnchor)
-    if (target && matched && matched.chapterId === target.id) readUpTo[target.id] = matched.order
+    const hit = landing(oldId, order)
+    if (target && hit && hit.chapterId === target.id) readUpTo[target.id] = hit.order
   }
+  const sameSpot = exact && nextParagraph && matched.get(exact.id) === nextParagraph.id
   return {
     bookId: state.bookId,
     chapterId: nextParagraph?.chapterId ?? nextChapter.id,
     paragraphIndex: nextParagraph?.order ?? 1,
-    offsetRatio: nextParagraph ? state.offsetRatio : 0,
+    offsetRatio: sameSpot ? state.offsetRatio : 0,
     readUpTo,
     updatedAt: nowIso(),
   }
 }
 
-export async function importBookBytes(bytes: Uint8Array, fileName: string): Promise<ImportOutcome> {
+export interface ImportOptions {
+  /** 同书名同译者时怎么办。不给就返回 conflict 让用户选。 */
+  onConflict?: 'replace' | 'separate'
+}
+
+function sameTranslator(a: string, b: string): boolean {
+  return a.replace(/\s+/g, '') === b.replace(/\s+/g, '')
+}
+
+export async function importBookBytes(
+  bytes: Uint8Array,
+  fileName: string,
+  options: ImportOptions = {},
+): Promise<ImportOutcome> {
   const parsed = await parseEpubSafe(bytes, fileName)
   const existing = await db.books.where('fingerprint').equals(parsed.fingerprint).first()
   if (existing) {
@@ -201,8 +280,11 @@ export async function importBookBytes(bytes: Uint8Array, fileName: string): Prom
     if (existing.fileMissing) await db.books.update(existing.id, { fileMissing: false, updatedAt: nowIso() })
     return { status: 'existing', bookId: existing.id }
   }
-  const sameTitle = await db.books.where('title').equals(parsed.title).first()
-  if (sameTitle) {
+  const sameTitle = (await db.books.where('title').equals(parsed.title).toArray()).find((book) =>
+    sameTranslator(book.translator, parsed.translator),
+  )
+  if (sameTitle && options.onConflict !== 'separate') {
+    if (options.onConflict !== 'replace') return { status: 'conflict', bookId: sameTitle.id, title: sameTitle.title }
     await replaceEdition(sameTitle, parsed, bytes)
     return { status: 'updated', bookId: sameTitle.id }
   }
@@ -284,7 +366,11 @@ export async function recordProgress(bookId: string, input: ProgressInput): Prom
     readUpTo,
     updatedAt: nowIso(),
   })
-  const done = input.chapterLength > 0 && input.readUpTo >= input.chapterLength
+  const chapter = await db.chapters.get(input.chapterId)
+  // 读完过的章回头翻看不降级。
+  const done =
+    chapter?.readStatus === 'done' ||
+    (input.chapterLength > 0 && (readUpTo[input.chapterId] ?? 0) >= input.chapterLength)
   await db.chapters.update(input.chapterId, { readStatus: done ? 'done' : 'reading' })
 }
 

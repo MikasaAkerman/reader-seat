@@ -1,7 +1,7 @@
 <template>
   <!-- 段落 html 在导入时已经过 DOMPurify -->
   <!-- eslint-disable vue/no-v-html -->
-  <article class="chapter">
+  <article class="chapter" @click="onClick">
     <h1 v-if="title && !titleRepeated" class="chapter__title">{{ title }}</h1>
     <div
       v-for="paragraph in paragraphs"
@@ -71,6 +71,16 @@ function onPointerDown(
   pressTimer = window.setTimeout(() => emit('interesting', paragraph.id), 600)
 }
 
+/** 书里的链接一律不让 webview 自己跳转，交给阅读页处理。 */
+function onClick(event: MouseEvent) {
+  if (!(event.target instanceof Element)) return
+  const link = event.target.closest('a')
+  if (!link || !link.closest('.chapter__p')) return
+  event.preventDefault()
+  const href = link.getAttribute('href')
+  if (href) emit('link', href)
+}
+
 function onPointerUp() {
   cancelPress()
   const selection = window.getSelection()
@@ -103,6 +113,7 @@ const emit = defineEmits<{
   open: [id: string]
   interesting: [id: string]
   highlight: [payload: { paragraphId: string; quote: string; start: number; end: number }]
+  link: [href: string]
 }>()
 </script>
 

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { latestBatch, localDay, rerollsOnDay } from '@/core/comments/batches'
+import { latestBatch, localDay, REROLL_DAILY_LIMIT, rerollsOnDay } from '@/core/comments/batches'
 import { commentsHidden, paragraphLocked } from '@/core/reading/unlock'
 import type { UnlockMode } from '@/core/types'
 import {
@@ -22,7 +22,7 @@ export const useCommentsStore = defineStore('comments', () => {
   const activeId = ref('')
   const batchNo = ref(0)
   const batchCount = ref(0)
-  const rerollsLeft = ref(3)
+  const rerollsLeft = ref(REROLL_DAILY_LIMIT)
   const chapterLocked = ref(false)
   let chapter = ''
   let bookId = ''
@@ -64,8 +64,8 @@ export const useCommentsStore = defineStore('comments', () => {
     const chosen = requestedBatch && batches.some((batch) => batch.batchNo === requestedBatch) ? requestedBatch : latest?.batchNo
     batchNo.value = chosen ?? 0
     batchCount.value = batches.length
-    rerollsLeft.value = Math.max(0, 3 - rerollsOnDay(batches, localDay(new Date())))
-    threads.value = chosen ? await listThreads(paragraphId, chosen) : []
+    rerollsLeft.value = Math.max(0, REROLL_DAILY_LIMIT - rerollsOnDay(batches, localDay(new Date())))
+    threads.value = await listThreads(paragraphId, chosen)
   }
 
   async function showBatch(offset: number) {

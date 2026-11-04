@@ -86,6 +86,7 @@ export interface CommentBatchRow {
 
 export interface CommentRow {
   id: string
+  /** 空字符串：用户主楼及其回复，不属于任何一批，每一批都显示。 */
   batchId: string
   paragraphId: string
   /** 主楼为空字符串，回复指向主楼 id */
@@ -112,6 +113,10 @@ export interface BookMemoryRow {
   stances?: StanceEntry[]
   userStance?: string[]
   entities: string[]
+  /** 全书滚动梗概，章末整理时更新 */
+  synopsis?: string
+  /** 梗概覆盖到第几章（章节 order）。回头重读更早的章节时不能拿它当前情。 */
+  synopsisThrough?: number
   updatedAt: string
 }
 
@@ -124,6 +129,7 @@ export interface GenerationLogRow {
   promptTokens: number
   completionTokens: number
   cacheHitTokens: number
+  reasoningTokens?: number
   cost: number
   error?: string
   latencyMs?: number
@@ -205,6 +211,16 @@ export class ReaderSeatDB extends Dexie {
       settings: 'key',
       bookFiles: 'bookId',
     })
+    this.version(2)
+      .stores({})
+      .upgrade(async (tx) => {
+        const comments = tx.table<CommentRow, string>('comments')
+        const all = await comments.toArray()
+        const userRoots = new Set(all.filter((row) => row.authorType === 'user' && !row.parentId).map((row) => row.id))
+        for (const row of all) {
+          if (userRoots.has(row.id) || userRoots.has(row.parentId)) await comments.update(row.id, { batchId: '' })
+        }
+      })
   }
 }
 

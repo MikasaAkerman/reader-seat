@@ -21,6 +21,11 @@ export interface MarkdownChapter {
   micro?: MarkdownMicro
 }
 
+/** 书名里可能有冒号、井号、引号，frontmatter 的值一律写成双引号字符串。 */
+function yamlString(value: string): string {
+  return JSON.stringify(value.replace(/\r?\n/g, ' '))
+}
+
 export function paragraphOpening(text: string): string {
   return text.replace(/\s+/g, '').slice(0, 20)
 }
@@ -35,10 +40,10 @@ export function buildReadingMarkdown(input: {
 }): string {
   const head = [
     '---',
-    `book: ${input.title}`,
-    `translator: ${input.translator}`,
-    `station: ${input.station ?? ''}`,
-    `exported: ${input.exportedAt}`,
+    `book: ${yamlString(input.title)}`,
+    `translator: ${yamlString(input.translator)}`,
+    `station: ${input.station ?? '""'}`,
+    `exported: ${yamlString(input.exportedAt)}`,
     '---',
     '',
   ]

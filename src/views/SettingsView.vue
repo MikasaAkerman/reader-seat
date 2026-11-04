@@ -6,6 +6,23 @@
         <VanField v-model="baseUrl" label="接口地址" placeholder="https://api.deepseek.com" />
         <VanField v-model="model" label="模型名" placeholder="deepseek-chat" />
         <VanField v-model="apiKey" label="API Key" type="password" placeholder="仅保存在本地" />
+        <VanCell title="本章说允许思考" label="章末整理在后台跑，开着更稳，但更慢也更贵">
+          <template #right-icon>
+            <VanSwitch v-model="chapterReasoning" size="20px" />
+          </template>
+        </VanCell>
+      </VanCellGroup>
+
+      <VanCellGroup inset title="计价（元 / 百万 token）" style="margin-top: 16px">
+        <VanField v-model.number="pricing.inputHitPerMTok" type="number" label="输入命中缓存" />
+        <VanField v-model.number="pricing.inputMissPerMTok" type="number" label="输入未命中" />
+        <VanField v-model.number="pricing.outputPerMTok" type="number" label="输出" />
+        <VanCell>
+          <div class="settings__presets">
+            <button type="button" @click="usePreset('deepseek')">DeepSeek 官方</button>
+            <button type="button" @click="usePreset('free')">免费模型</button>
+          </div>
+        </VanCell>
       </VanCellGroup>
 
       <div class="settings__actions">
@@ -63,6 +80,7 @@ import {
   CellGroup as VanCellGroup,
   Field as VanField,
   NavBar as VanNavBar,
+  Switch as VanSwitch,
   showFailToast,
   showSuccessToast,
   showToast,
@@ -71,7 +89,8 @@ import { summarizeCosts, type CostBook, type CostDay } from '@/core/cost/summary
 import { exportBackup, restoreBackup } from '@/db/repos/backup'
 import { listBookCards, listGenerationLogs } from '@/db/repos/library'
 import { platform } from '@/platform'
-import { useSettingsStore } from '@/stores/settings'
+import type { Pricing } from '@/core/llm'
+import { PRICING_PRESETS, useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
 const settings = useSettingsStore()
@@ -79,6 +98,8 @@ const settings = useSettingsStore()
 const baseUrl = ref('')
 const model = ref('')
 const apiKey = ref('')
+const chapterReasoning = ref(true)
+const pricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
 const saving = ref(false)
 const testing = ref(false)
 const testResult = ref<{ json: string; stream: string; detail?: string } | null>(null)
@@ -91,6 +112,8 @@ onMounted(async () => {
   baseUrl.value = settings.baseUrl
   model.value = settings.model
   apiKey.value = settings.apiKey
+  chapterReasoning.value = settings.chapterReasoning
+  pricing.value = { ...settings.pricing }
   const [logs, cards] = await Promise.all([listGenerationLogs(), listBookCards()])
   const titles = Object.fromEntries(cards.map((card) => [card.id, card.title]))
   const summary = summarizeCosts(logs, titles)
@@ -109,17 +132,32 @@ function money(value: number) {
 function costLabel(book: CostBook) {
   const hit = `${Math.round(book.cacheHitRate * 100)}%`
   const latency = book.latencyMs == null ? '' : `，平均 ${book.latencyMs} ms`
-  return `${book.calls} 次，输入 ${book.promptTokens}，输出 ${book.completionTokens}，费用 ${money(book.cost)}，缓存命中 ${hit}${latency}`
+  const thinking = book.reasoningTokens > 0 ? `（其中思考 ${book.reasoningTokens}）` : ''
+  return `${book.calls} 次，输入 ${book.promptTokens}，输出 ${book.completionTokens}${thinking}，费用 ${money(book.cost)}，缓存命中 ${hit}${latency}`
+}
+
+function usePreset(name: keyof typeof PRICING_PRESETS) {
+  pricing.value = { ...PRICING_PRESETS[name] }
+}
+
+function formInput() {
+  return {
+    baseUrl: baseUrl.value.trim(),
+    model: model.value.trim(),
+    apiKey: apiKey.value.trim(),
+    chapterReasoning: chapterReasoning.value,
+    pricing: {
+      inputHitPerMTok: Number(pricing.value.inputHitPerMTok) || 0,
+      inputMissPerMTok: Number(pricing.value.inputMissPerMTok) || 0,
+      outputPerMTok: Number(pricing.value.outputPerMTok) || 0,
+    },
+  }
 }
 
 async function onSave() {
   saving.value = true
   try {
-    await settings.save({
-      baseUrl: baseUrl.value.trim(),
-      model: model.value.trim(),
-      apiKey: apiKey.value.trim(),
-    })
+    await settings.save(formInput())
     showSuccessToast('已保存')
   } catch (err) {
     showFailToast(err instanceof Error ? err.message : '保存失败')
@@ -160,11 +198,7 @@ async function onTest() {
   testing.value = true
   testResult.value = null
   try {
-    await settings.save({
-      baseUrl: baseUrl.value.trim(),
-      model: model.value.trim(),
-      apiKey: apiKey.value.trim(),
-    })
+    await settings.save(formInput())
     const result = await settings.testConnection()
     testResult.value = {
       json: result.jsonOk ? '通过' : '失败',
@@ -197,5 +231,18 @@ async function onTest() {
 
 .settings__file {
   display: none;
+}
+
+.settings__presets {
+  display: flex;
+  gap: 8px;
+
+  button {
+    border: 1px solid var(--rs-border);
+    background: transparent;
+    color: inherit;
+    border-radius: 999px;
+    padding: 4px 10px;
+  }
 }
 </style>

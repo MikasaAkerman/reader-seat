@@ -6,6 +6,7 @@ export interface CostLog {
   promptTokens: number
   completionTokens: number
   cacheHitTokens: number
+  reasoningTokens?: number
   cost: number
   latencyMs?: number
 }
@@ -16,6 +17,7 @@ export interface CostBook {
   calls: number
   promptTokens: number
   completionTokens: number
+  reasoningTokens: number
   cost: number
   cacheHitRate: number
   latencyMs: number | null
@@ -44,6 +46,7 @@ export function summarizeCosts(logs: CostLog[], titles: Record<string, string>):
       calls: 0,
       promptTokens: 0,
       completionTokens: 0,
+      reasoningTokens: 0,
       cost: 0,
       cacheHitRate: 0,
       latencyMs: null,
@@ -54,6 +57,7 @@ export function summarizeCosts(logs: CostLog[], titles: Record<string, string>):
     book.calls += 1
     book.promptTokens += log.promptTokens
     book.completionTokens += log.completionTokens
+    book.reasoningTokens += log.reasoningTokens ?? 0
     book.cost += log.cost
     book.hit += log.cacheHitTokens
     if (typeof log.latencyMs === 'number') {
@@ -79,6 +83,7 @@ export function summarizeCosts(logs: CostLog[], titles: Record<string, string>):
         calls: book.calls,
         promptTokens: book.promptTokens,
         completionTokens: book.completionTokens,
+        reasoningTokens: book.reasoningTokens,
         cost: book.cost,
         cacheHitRate: rate(book.hit, book.promptTokens),
         latencyMs: book.latencyCount > 0 ? Math.round(book.latencySum / book.latencyCount) : null,

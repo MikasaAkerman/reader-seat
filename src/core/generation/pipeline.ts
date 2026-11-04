@@ -1,12 +1,32 @@
-import type { ParagraphRow } from '@/db/schema'
-import type { StoredComment } from '@/db/repos/comments'
 import { DEFAULT_LINEUP } from '../personas'
-import type { ResidentPersona, TextBlock } from '../types'
+import type { AuthorType, ResidentPersona, TextBlock } from '../types'
 import { planBlocks } from './blocks'
 import type { RoughParagraph } from './schema'
 
 export const BUFFER_LOW = 8
 export const BUFFER_TARGET = 15
+export const HOT_LIMIT = 2
+/** 进入章节或跳读后的第一块，先小一点，让眼前几段尽快有反应。 */
+export const COLD_BLOCK_PARAS = 5
+/** 跳读时，当前段加后面几段。 */
+export const JUMP_BLOCK_PARAS = 4
+
+export type PipelineStatus = 'none' | 'rough' | 'refining' | 'refined' | 'failed'
+
+export interface PipelineRow {
+  id: string
+  order: number
+  text: string
+  kind: 'heading' | 'body'
+  genStatus: PipelineStatus
+}
+
+export interface PipelineComment {
+  authorType: AuthorType
+  displayName: string
+  role: string
+  text: string
+}
 
 export function lineupFor(spoilerLevel: string, enabled: Record<string, boolean> = {}): ResidentPersona[] {
   return DEFAULT_LINEUP.filter((persona) => {
@@ -16,28 +36,30 @@ export function lineupFor(spoilerLevel: string, enabled: Record<string, boolean>
   })
 }
 
-export function planNextBlock(
-  rows: ParagraphRow[],
+export function planNextBlock<T extends PipelineRow>(
+  rows: T[],
   fromOrder: number,
   skip: ReadonlySet<string> = new Set(),
-): ParagraphRow[] | null {
+  maxParagraphs?: number,
+): T[] | null {
   const sorted = [...rows].sort((a, b) => a.order - b.order)
   const start = sorted.findIndex(
     (row) => row.order >= fromOrder && row.genStatus === 'none' && !skip.has(row.id),
   )
   if (start < 0) return null
-  const contiguous: ParagraphRow[] = []
+  const contiguous: T[] = []
   for (const row of sorted.slice(start)) {
     if (row.genStatus !== 'none' || skip.has(row.id)) break
     contiguous.push(row)
   }
   const first = planBlocks(contiguous.map((row) => row.text))[0]
   if (!first) return null
-  return contiguous.slice(0, first.paragraphs.length)
+  const size = maxParagraphs ? Math.min(maxParagraphs, first.paragraphs.length) : first.paragraphs.length
+  return contiguous.slice(0, size)
 }
 
-export function readyAhead(
-  rows: ParagraphRow[],
+export function readyAhead<T extends PipelineRow>(
+  rows: T[],
   fromOrder: number,
   skip: ReadonlySet<string> = new Set(),
 ): number {
@@ -55,7 +77,7 @@ export function readyAhead(
   return count
 }
 
-export function blockIndex(rows: ParagraphRow[], order: number): number {
+export function blockIndex<T extends PipelineRow>(rows: T[], order: number): number {
   const sorted = [...rows].sort((a, b) => a.order - b.order)
   const blocks = planBlocks(sorted.map((row) => row.text))
   let consumed = 0
@@ -67,47 +89,75 @@ export function blockIndex(rows: ParagraphRow[], order: number): number {
   return 0
 }
 
-export function toTextBlock(rows: ParagraphRow[]): TextBlock {
+/** 跳读后要立刻生成的一小块：当前段和后面几段里还没生成的。 */
+export function jumpBlock<T extends PipelineRow>(rows: T[], order: number, skip: ReadonlySet<string>): T[] {
+  const sorted = [...rows].sort((a, b) => a.order - b.order)
+  const out: T[] = []
+  for (const row of sorted) {
+    if (row.order < order) continue
+    if (row.genStatus !== 'none' || skip.has(row.id)) break
+    out.push(row)
+    if (out.length >= JUMP_BLOCK_PARAS) break
+  }
+  return out
+}
+
+export function toTextBlock(rows: { text: string }[]): TextBlock {
   return { paragraphs: rows.map((row, index) => ({ index: index + 1, text: row.text })) }
 }
 
-export interface AssignedParagraph {
-  row: ParagraphRow
+export interface AssignedParagraph<T extends PipelineRow = PipelineRow> {
+  row: T
   score: number
   hot: boolean
   genStatus: 'rough' | 'refining'
-  comments: StoredComment[]
+  comments: PipelineComment[]
+  /** 精修时告诉模型这段为什么热 */
+  reason: string
 }
 
-/** 标题段记 0 分。一块里最多留下 2 个热段。 */
-export function assignGeneration(rows: ParagraphRow[], generated: RoughParagraph[]): AssignedParagraph[] {
+/**
+ * 标题段记 0 分。命中预测的段按热段处理。热段名额用完的降为 2 分，保留粗评。
+ * 热段也先存粗评里的那条短评，精修回来再替换。
+ */
+export function assignOne<T extends PipelineRow>(
+  row: T,
+  found: RoughParagraph | undefined,
+  hotSoFar: number,
+): AssignedParagraph<T> {
+  if (row.kind === 'heading') {
+    return { row, score: 0, hot: false, genStatus: 'rough', comments: [], reason: '' }
+  }
+  const hits = found?.prediction_hits ?? []
+  let score: number = hits.length > 0 ? 3 : (found?.score ?? 0)
+  let hot = false
+  if (score === 3) {
+    if (hotSoFar < HOT_LIMIT) hot = true
+    else score = 2
+  }
+  const reason = hits.length > 0
+    ? `命中预测：${hits.map((hit) => `${hit.prediction_id}（${hit.result}）`).join('；')}`
+    : '粗评分为 3'
+  return {
+    row,
+    score,
+    hot,
+    genStatus: hot ? 'refining' : 'rough',
+    comments: (found?.comments ?? []).map(toStored),
+    reason: hot ? reason : '',
+  }
+}
+
+export function assignGeneration<T extends PipelineRow>(rows: T[], generated: RoughParagraph[]): AssignedParagraph<T>[] {
   let hot = 0
   return rows.map((row, index) => {
-    const found = generated.find((item) => item.pid === `p${index + 1}`)
-    if (row.kind === 'heading') {
-      return { row, score: 0, hot: false, genStatus: 'rough', comments: [] }
-    }
-    let score = found?.score ?? 0
-    let isHot = false
-    if (score === 3) {
-      if (hot < 2) {
-        hot += 1
-        isHot = true
-      } else {
-        score = 2
-      }
-    }
-    return {
-      row,
-      score,
-      hot: isHot,
-      genStatus: isHot ? 'refining' : 'rough',
-      comments: isHot ? [] : (found?.comments ?? []).map(toStored),
-    }
+    const assigned = assignOne(row, generated.find((item) => item.pid === `p${index + 1}`), hot)
+    if (assigned.hot) hot += 1
+    return assigned
   })
 }
 
-function toStored(comment: RoughParagraph['comments'][number]): StoredComment {
+function toStored(comment: RoughParagraph['comments'][number]): PipelineComment {
   const resident = comment.author_type === 'resident'
   return {
     authorType: comment.author_type,

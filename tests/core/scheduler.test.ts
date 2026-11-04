@@ -21,7 +21,7 @@ function row(order: number, text: string): ParagraphRow {
     text,
     html: text,
     textHash: String(order),
-    kind: 'paragraph',
+    kind: 'body',
     genStatus: 'none',
   }
 }
@@ -145,6 +145,45 @@ describe('scheduler', () => {
     scheduler.resume()
     await vi.advanceTimersByTimeAsync(0)
     expect(ran).toEqual(['live'])
+  })
+
+  it('also drops a queued jump block but keeps a reply', async () => {
+    const scheduler = new Scheduler()
+    scheduler.pause()
+    scheduler.enqueue({ kind: 'live', key: 'p5,p6', distance: 0, droppable: true, run: async () => {} })
+    scheduler.enqueue({ kind: 'live', key: 'reply:c1', distance: 0, run: async () => {} })
+    expect(scheduler.dropPending()).toEqual(['p5', 'p6'])
+    expect(scheduler.pendingCount).toBe(1)
+  })
+
+  it('runs two rough blocks at once while the limit is raised, and resets it on stop', async () => {
+    const scheduler = new Scheduler()
+    const gates = [held(), held(), held()]
+    const started: string[] = []
+    scheduler.setLimit('rough', 2)
+    gates.forEach((gate, index) =>
+      scheduler.enqueue({
+        kind: 'rough',
+        key: `b${index}`,
+        distance: index,
+        run: async () => {
+          started.push(`b${index}`)
+          await gate.promise
+        },
+      }),
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(started).toEqual(['b0', 'b1'])
+    scheduler.setLimit('rough', 1)
+    gates[0]!.release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(started).toEqual(['b0', 'b1'])
+    gates[1]!.release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(started).toEqual(['b0', 'b1', 'b2'])
+    scheduler.setLimit('rough', 2)
+    scheduler.stop()
+    expect(scheduler.limitOf('rough')).toBe(1)
   })
 
   it('does not dispatch while paused, then resumes the queue', async () => {

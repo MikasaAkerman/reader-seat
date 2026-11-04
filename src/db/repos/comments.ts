@@ -1,4 +1,4 @@
-import { latestBatch } from '@/core/comments/batches'
+import { latestBatch, rootsWithUserReplies } from '@/core/comments/batches'
 import { emptyMemory } from '@/core/memory'
 import type { AuthorType, BookMemory } from '@/core/types'
 import { createId } from '../id'
@@ -9,6 +9,9 @@ import {
   type GenStatus,
   type GenerationLogRow,
 } from '../schema'
+
+/** 用户主楼和它下面的回复都放在这里，不属于任何一批。 */
+export const USER_ZONE = ''
 
 export interface StoredComment {
   authorType: AuthorType
@@ -52,8 +55,21 @@ export interface BubbleState {
   locked?: boolean
 }
 
+export interface MemoryState {
+  memory: BookMemory
+  entities: string[]
+  /** 全书滚动梗概 */
+  synopsis: string
+  /** 梗概覆盖到的章节 order，-1 表示还没有 */
+  synopsisThrough: number
+}
+
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+function visible(comment: CommentRow): boolean {
+  return !comment.mismatched && !comment.spoiler
 }
 
 export function bubbleFor(
@@ -70,26 +86,25 @@ export function bubbleFor(
   return { count, hot: score === 3, pending: false, failed: false }
 }
 
+/** 每段显示的条数：最新一批，加上用户区。 */
 export async function commentCounts(paragraphIds: string[]): Promise<Record<string, number>> {
   const counts: Record<string, number> = {}
   if (paragraphIds.length === 0) return counts
   const batches = await db.commentBatches.where('paragraphId').anyOf(paragraphIds).toArray()
-  const chosen = new Map<string, string>()
   const grouped = new Map<string, typeof batches>()
   for (const batch of batches) {
     const list = grouped.get(batch.paragraphId) ?? []
     list.push(batch)
     grouped.set(batch.paragraphId, list)
   }
-  for (const [paragraphId, list] of grouped) {
+  const shown = new Set<string>([USER_ZONE])
+  for (const list of grouped.values()) {
     const batch = latestBatch(list)
-    if (batch) chosen.set(paragraphId, batch.id)
+    if (batch) shown.add(batch.id)
   }
-  const ids = [...chosen.values()]
-  if (ids.length === 0) return counts
-  const comments = await db.comments.where('batchId').anyOf(ids).toArray()
+  const comments = await db.comments.where('paragraphId').anyOf(paragraphIds).toArray()
   for (const comment of comments) {
-    if (comment.mismatched || comment.spoiler) continue
+    if (!shown.has(comment.batchId) || !visible(comment)) continue
     counts[comment.paragraphId] = (counts[comment.paragraphId] ?? 0) + 1
   }
   return counts
@@ -99,9 +114,9 @@ export async function listThreads(paragraphId: string, batchNo?: number): Promis
   const batches = await db.commentBatches.where('paragraphId').equals(paragraphId).toArray()
   const batch =
     batchNo === undefined ? latestBatch(batches) : batches.find((item) => item.batchNo === batchNo)
-  if (!batch) return []
-  const comments = await db.comments.where('batchId').equals(batch.id).toArray()
-  return threadsFrom(comments.filter((comment) => !comment.mismatched && !comment.spoiler))
+  const rows = await db.comments.where('paragraphId').equals(paragraphId).toArray()
+  const chosen = rows.filter((row) => row.batchId === USER_ZONE || (batch && row.batchId === batch.id))
+  return threadsFrom(chosen.filter(visible))
 }
 
 export async function listBatches(paragraphId: string) {
@@ -155,21 +170,21 @@ function marksOf(comment: CommentRow): CommentMarks {
   }
 }
 
+/**
+ * 用户主楼进用户区；回复跟着主楼所在的批，这样换批前后都看得到。
+ */
 export async function appendComment(
   paragraphId: string,
   comment: StoredComment,
   parentId = '',
 ): Promise<string> {
-  const existing = await db.commentBatches.where({ paragraphId, batchNo: 1 }).first()
-  const batchId = existing?.id ?? createId()
-  const current = existing ? await db.comments.where('batchId').equals(batchId).toArray() : []
-  const seq = current.reduce((max, row) => Math.max(max, row.seq ?? 0), -1) + 1
   const id = createId()
-  await db.transaction('rw', [db.commentBatches, db.comments], async () => {
-    if (!existing) {
-      await db.commentBatches.add({ id: batchId, paragraphId, batchNo: 1, createdAt: nowIso() })
-    }
-    await db.comments.add(toRow(paragraphId, batchId, id, parentId, comment, seq))
+  await db.transaction('rw', [db.comments], async () => {
+    const parent = parentId ? await db.comments.get(parentId) : undefined
+    const batchId = parent ? parent.batchId : USER_ZONE
+    const siblings = await db.comments.where('paragraphId').equals(paragraphId).toArray()
+    const seq = siblings.reduce((max, row) => Math.max(max, row.seq ?? 0), -1) + 1
+    await db.comments.add(toRow(paragraphId, batchId, id, parent ? parent.id : '', comment, seq))
   })
   return id
 }
@@ -182,21 +197,38 @@ export async function setCommentMark(
   await db.comments.update(commentId, { [mark]: on })
 }
 
+const TASTE_TTL_MS = 60_000
+const tasteCache = new Map<string, { at: number; value: string }>()
+
 export async function tasteExamplesFor(bookId: string): Promise<string> {
-  const paragraphs = await db.paragraphs.where('bookId').equals(bookId).toArray()
-  if (paragraphs.length === 0) return ''
-  const comments = await db.comments.where('paragraphId').anyOf(paragraphs.map((row) => row.id)).toArray()
-  const line = (comment: CommentRow, label: string) => `${label}：${comment.text.slice(0, 50)}`
-  const marked = paragraphs
+  const cached = tasteCache.get(bookId)
+  if (cached && Date.now() - cached.at < TASTE_TTL_MS) return cached.value
+  const ids = (await db.paragraphs.where('bookId').equals(bookId).primaryKeys()) as string[]
+  if (ids.length === 0) return ''
+  const marked = await db.paragraphs
+    .where('bookId')
+    .equals(bookId)
     .filter((paragraph) => paragraph.userMarked === 'interesting')
-    .slice(0, 3)
-    .map((paragraph) => `想再看到：${paragraph.text.slice(0, 50)}`)
-  const positive = comments.filter((comment) => comment.saved).slice(0, 3).map((comment) => line(comment, '想再看到'))
-  const negative = comments
-    .filter((comment) => comment.boring || comment.spoiler || comment.wrong)
-    .slice(0, 3)
-    .map((comment) => line(comment, '不要这样'))
-  return [...marked, ...positive, ...negative].join('\n')
+    .toArray()
+  const comments = await db.comments
+    .where('paragraphId')
+    .anyOf(ids)
+    .filter((comment) => comment.saved === true || comment.boring === true || comment.spoiler === true || comment.wrong === true)
+    .toArray()
+  const line = (comment: CommentRow, label: string) => `${label}：${comment.text.slice(0, 50)}`
+  const value = [
+    ...marked.slice(-3).map((paragraph) => `想再看到：${paragraph.text.slice(0, 50)}`),
+    ...comments
+      .filter((comment) => comment.saved)
+      .slice(-3)
+      .map((comment) => line(comment, '想再看到')),
+    ...comments
+      .filter((comment) => comment.boring || comment.spoiler || comment.wrong)
+      .slice(-3)
+      .map((comment) => line(comment, '不要这样')),
+  ].join('\n')
+  tasteCache.set(bookId, { at: Date.now(), value })
+  return value
 }
 
 function rank(authorType: AuthorType): number {
@@ -205,49 +237,64 @@ function rank(authorType: AuthorType): number {
   return 2
 }
 
-/** 同一段只保留第 1 批。再次写入会替换这一批，而不是另开一批。 */
+function markKey(row: Pick<CommentRow, 'authorType' | 'displayName' | 'text'>): string {
+  return `${row.authorType}|${row.displayName}|${row.text.trim()}`
+}
+
+/**
+ * 写入（或重写）这一段当前显示的那一批 AI 评论。
+ * 用户区不动；用户回过话的 AI 主楼整楼保留；内容相同的旧评论把标记带过来。
+ */
 export async function saveParagraphComments(
   paragraphId: string,
   comments: StoredComment[],
   score: number,
   genStatus: GenStatus,
 ): Promise<void> {
-  const existing = await db.commentBatches.where({ paragraphId, batchNo: 1 }).first()
-  const batchId = existing?.id ?? createId()
-  const rows: CommentRow[] = []
-  let seq = 0
-  for (const comment of comments) {
-    const id = createId()
-    rows.push(toRow(paragraphId, batchId, id, '', comment, seq))
-    seq += 1
-    for (const reply of comment.replies ?? []) {
-      rows.push(toRow(paragraphId, batchId, createId(), id, reply, seq))
-      seq += 1
-    }
-  }
   await db.transaction('rw', [db.commentBatches, db.comments, db.paragraphs], async () => {
-    const kept = existing
-      ? (await db.comments.where('batchId').equals(batchId).toArray()).filter(
-          (row) => row.authorType === 'user' && !row.parentId,
-        )
-      : []
-    if (!existing) {
-      await db.commentBatches.add({
-        id: batchId,
-        paragraphId,
-        batchNo: 1,
-        createdAt: nowIso(),
-      })
-    } else {
-      await db.comments.where('batchId').equals(batchId).delete()
+    const batches = await db.commentBatches.where('paragraphId').equals(paragraphId).toArray()
+    let batch = latestBatch(batches)
+    if (!batch && comments.length > 0) {
+      batch = { id: createId(), paragraphId, batchNo: 1, createdAt: nowIso() }
+      await db.commentBatches.add(batch)
     }
-    const keptRows = kept.map((row) => ({ ...row, batchId }))
-    const writing = [...rows, ...keptRows]
-    if (writing.length > 0) await db.comments.bulkAdd(writing)
+    if (batch) {
+      const batchId = batch.id
+      const existing = await db.comments.where('batchId').equals(batchId).toArray()
+      const keepRoots = rootsWithUserReplies(existing)
+      const kept = existing.filter((row) => keepRoots.has(row.id) || keepRoots.has(row.parentId))
+      const removed = existing.filter((row) => !kept.includes(row))
+      const marks = new Map(removed.map((row) => [markKey(row), marksOf(row)]))
+      const withMarks = (row: CommentRow): CommentRow => {
+        const found = marks.get(markKey(row))
+        if (!found) return row
+        return {
+          ...row,
+          ...(found.saved ? { saved: true } : {}),
+          ...(found.boring ? { boring: true } : {}),
+          ...(found.spoiler ? { spoiler: true } : {}),
+          ...(found.wrong ? { wrong: true } : {}),
+        }
+      }
+      const rows: CommentRow[] = []
+      let seq = 0
+      for (const comment of comments) {
+        const id = createId()
+        rows.push(withMarks(toRow(paragraphId, batchId, id, '', comment, seq)))
+        seq += 1
+        for (const reply of comment.replies ?? []) {
+          rows.push(withMarks(toRow(paragraphId, batchId, createId(), id, reply, seq)))
+          seq += 1
+        }
+      }
+      if (removed.length > 0) await db.comments.bulkDelete(removed.map((row) => row.id))
+      if (rows.length > 0) await db.comments.bulkAdd(rows)
+    }
     await db.paragraphs.update(paragraphId, { score, genStatus })
   })
 }
 
+/** 新开一批。传进来的评论会换新 id；主楼不在这批里的回复丢掉。 */
 export async function saveNextBatch(
   paragraphId: string,
   batchNo: number,
@@ -256,13 +303,15 @@ export async function saveNextBatch(
   const batchId = createId()
   const idMap = new Map<string, string>()
   for (const comment of comments) idMap.set(comment.id, createId())
-  const rows = comments.map((comment) => ({
-    ...comment,
-    id: idMap.get(comment.id) ?? createId(),
-    batchId,
-    paragraphId,
-    parentId: comment.parentId && idMap.has(comment.parentId) ? idMap.get(comment.parentId)! : '',
-  }))
+  const rows = comments
+    .filter((comment) => !comment.parentId || idMap.has(comment.parentId))
+    .map((comment) => ({
+      ...comment,
+      id: idMap.get(comment.id) ?? createId(),
+      batchId,
+      paragraphId,
+      parentId: comment.parentId ? (idMap.get(comment.parentId) ?? '') : '',
+    }))
   await db.transaction('rw', [db.commentBatches, db.comments], async () => {
     await db.commentBatches.add({ id: batchId, paragraphId, batchNo, createdAt: nowIso() })
     if (rows.length > 0) await db.comments.bulkAdd(rows)
@@ -298,9 +347,8 @@ export async function markUserInterest(paragraphId: string): Promise<void> {
   await db.paragraphs.update(paragraphId, { userMarked: 'interesting' })
 }
 
-export async function readMemory(bookId: string): Promise<{ memory: BookMemory; entities: string[] }> {
-  const row = await db.bookMemories.get(bookId)
-  if (!row) return { memory: emptyMemory(bookId), entities: [] }
+function stateFrom(bookId: string, row: BookMemoryRow | undefined): MemoryState {
+  if (!row) return { memory: emptyMemory(bookId), entities: [], synopsis: '', synopsisThrough: -1 }
   return {
     memory: {
       bookId,
@@ -313,10 +361,13 @@ export async function readMemory(bookId: string): Promise<{ memory: BookMemory; 
       updatedAt: row.updatedAt,
     },
     entities: row.entities ?? [],
+    synopsis: row.synopsis ?? '',
+    synopsisThrough: row.synopsisThrough ?? -1,
   }
 }
 
-export async function writeMemory(memory: BookMemory, entities: string[]): Promise<void> {
+function rowFrom(state: MemoryState): BookMemoryRow {
+  const { memory } = state
   const row: BookMemoryRow = {
     bookId: memory.bookId,
     nicknames: memory.nicknames,
@@ -325,10 +376,36 @@ export async function writeMemory(memory: BookMemory, entities: string[]): Promi
     scenes: memory.scenes,
     stances: memory.stances,
     userStance: memory.userStance,
-    entities,
+    entities: state.entities,
+    synopsis: state.synopsis,
+    synopsisThrough: state.synopsisThrough,
     updatedAt: memory.updatedAt,
   }
-  await db.bookMemories.put(JSON.parse(JSON.stringify(row)) as BookMemoryRow)
+  return JSON.parse(JSON.stringify(row)) as BookMemoryRow
+}
+
+export async function readMemory(bookId: string): Promise<MemoryState> {
+  return stateFrom(bookId, await db.bookMemories.get(bookId))
+}
+
+/** 整体覆盖。只给用户在档案页手动编辑时用。 */
+export async function writeMemory(memory: BookMemory, entities: string[]): Promise<void> {
+  await db.transaction('rw', [db.bookMemories], async () => {
+    const current = stateFrom(memory.bookId, await db.bookMemories.get(memory.bookId))
+    await db.bookMemories.put(rowFrom({ ...current, memory, entities }))
+  })
+}
+
+/**
+ * 读最新一份、合并、写回，都在同一个事务里。
+ * 生成任务并发跑，各自拿旧快照整行覆盖会互相吃掉更新。
+ */
+export async function updateMemory(bookId: string, fn: (state: MemoryState) => MemoryState): Promise<MemoryState> {
+  return db.transaction('rw', [db.bookMemories], async () => {
+    const next = fn(stateFrom(bookId, await db.bookMemories.get(bookId)))
+    await db.bookMemories.put(rowFrom(next))
+    return next
+  })
 }
 
 export async function writeGenerationLog(entry: Omit<GenerationLogRow, 'id' | 'createdAt'>): Promise<void> {

@@ -31,6 +31,7 @@ export const phase0DocumentSchema = z.object({
     promptTokens: z.number(),
     completionTokens: z.number(),
     cacheHitTokens: z.number(),
+    reasoningTokens: z.number().default(0),
   }),
   cost: z.number(),
 })

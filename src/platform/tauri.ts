@@ -12,7 +12,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { type as osType } from '@tauri-apps/plugin-os'
 import { LazyStore } from '@tauri-apps/plugin-store'
 import type { Platform, PlatformKind } from './types'
-import { notImplemented } from './types'
+import { exportFormat, notImplemented } from './types'
 
 const secretStore = new LazyStore('secrets.json')
 
@@ -54,6 +54,9 @@ export function createTauriPlatform(): Platform {
     async readBookFile(bookId) {
       return readFile(bookPath(bookId), { baseDir: BaseDirectory.AppData })
     },
+    async hasBookFile(bookId) {
+      return exists(bookPath(bookId), { baseDir: BaseDirectory.AppData })
+    },
     async deleteBookFile(bookId) {
       if (await exists(bookPath(bookId), { baseDir: BaseDirectory.AppData })) {
         await remove(bookPath(bookId), { baseDir: BaseDirectory.AppData })
@@ -64,9 +67,10 @@ export function createTauriPlatform(): Platform {
         await writeTextFile(fileName, content, { baseDir: BaseDirectory.Download })
         return
       }
+      const format = exportFormat(fileName)
       const path = await save({
         defaultPath: fileName,
-        filters: [{ name: 'JSON', extensions: ['json'] }],
+        filters: [{ name: format.name, extensions: [format.extension] }],
       })
       if (!path) return
       await writeTextFile(path, content)

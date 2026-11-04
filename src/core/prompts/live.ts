@@ -1,5 +1,6 @@
 import type { ChatMessage } from '../llm/types'
 import { PROMPT_VERSION, SHARED_CONSTRAINTS } from './constraints'
+import { bookInfo } from './rough'
 
 export interface LiveReplierPrompt {
   role: string
@@ -12,6 +13,7 @@ export interface LivePromptContext {
   spoilerLevel: string
   memorySnapshot: string
   priorSummary: string
+  /** 本章已读到的文本，超长时只取末尾一截 */
   textUntilHere: string
   userText: string
   parentText?: string
@@ -34,18 +36,15 @@ export function buildLivePrompt(ctx: LivePromptContext): ChatMessage[] {
         `提示词版本：${PROMPT_VERSION}`,
       ].join('\n'),
     },
-    { role: 'user', content: `接话的人\n${who || '（无）'}` },
+    { role: 'user', content: `书籍信息\n${bookInfo(ctx)}\n\n前文摘要\n${ctx.priorSummary || '（无）'}` },
     { role: 'user', content: `书圈记忆\n${ctx.memorySnapshot || '（空）'}` },
-    {
-      role: 'user',
-      content: `前文摘要\n${ctx.priorSummary || '（无）'}\n书名：${ctx.title}\n防剧透：${ctx.spoilerLevel}`,
-    },
+    { role: 'user', content: `已经读到的文本\n${ctx.textUntilHere}` },
     {
       role: 'user',
       content: [
+        `接话的人\n${who || '（无）'}`,
         ctx.parentText ? `被回复的评论\n${ctx.parentText}` : '',
         `读者刚写的\n${ctx.userText}`,
-        `已经读到的文本\n${ctx.textUntilHere}`,
       ]
         .filter(Boolean)
         .join('\n\n'),

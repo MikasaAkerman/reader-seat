@@ -60,6 +60,7 @@
           @open="openComments"
           @interesting="onInteresting"
           @highlight="onHighlight"
+          @link="onLink"
         />
         <ChapterTalk
           :hidden="comments.chapterLocked"
@@ -165,6 +166,14 @@
       </form>
     </VanPopup>
 
+    <VanPopup v-model:show="footnoteOpen" position="bottom" :lock-scroll="false" class="reader__sheet">
+      <section v-if="footnote" class="reader__notes">
+        <h2>注释</h2>
+        <p>{{ footnote.text }}</p>
+        <button v-if="footnote.here" type="button" @click="jumpToFootnote">跳到这一段</button>
+      </section>
+    </VanPopup>
+
     <VanPopup v-model:show="tocOpen" position="left" :lock-scroll="false" class="reader__toc">
       <ul>
         <li v-for="chapter in chapters" :key="chapter.id">
@@ -178,8 +187,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NavBar as VanNavBar, Popup as VanPopup } from 'vant'
-import { loadChapterImages } from '@/core/epub'
+import { NavBar as VanNavBar, Popup as VanPopup, showToast } from 'vant'
+import { findLinkTarget, imageSrcs, loadChapterImages, resolveBookLink, rewriteImages } from '@/core/epub'
 import { paragraphOpening } from '@/core/export/markdown'
 import { lineupFor } from '@/core/generation/pipeline'
 import ChapterContent from '@/components/reader/ChapterContent.vue'
@@ -222,6 +231,13 @@ const micro = ref<{ judgment: string; evidence: string; reservation: string } | 
 const highlightDraft = ref<{ paragraphId: string; quote: string; start: number; end: number } | null>(null)
 const noteText = ref('')
 const danmaku = ref<{ paragraphId: string; text: string } | null>(null)
+const footnote = ref<{ paragraphId: string; text: string; here: boolean } | null>(null)
+const footnoteOpen = computed({
+  get: () => footnote.value !== null,
+  set: (open: boolean) => {
+    if (!open) footnote.value = null
+  },
+})
 const highlightOpen = computed({
   get: () => highlightDraft.value !== null,
   set: (open: boolean) => {
@@ -246,6 +262,9 @@ let readFloor = 0
 let ignore = false
 let timer = 0
 let pending: ProgressInput | null = null
+/** 最后一段完整露出满这么久，就算读完这一章。 */
+const LAST_VISIBLE_MS = 2000
+let lastVisibleTimer = 0
 
 const bookId = computed(() => String(route.params.bookId))
 const chapterId = computed(() =>
@@ -286,6 +305,7 @@ watch(
 
 onBeforeUnmount(() => {
   loadToken += 1
+  window.clearTimeout(lastVisibleTimer)
   observer?.disconnect()
   revokeUrls()
   generation.stop()
@@ -321,6 +341,8 @@ async function load() {
 
 async function showChapter(id: string, state: ReadingStateRow | undefined) {
   await flush()
+  window.clearTimeout(lastVisibleTimer)
+  lastVisibleTimer = 0
   observer?.disconnect()
   revokeUrls()
   const paragraphs = await listParagraphs(id)
@@ -352,6 +374,7 @@ async function showChapter(id: string, state: ReadingStateRow | undefined) {
   bindObserver()
   requestAnimationFrame(() => {
     ignore = false
+    queueSave()
   })
   const order = state?.chapterId === id ? state.paragraphIndex : 1
   comments.setGate({
@@ -462,15 +485,42 @@ function measure(): ProgressInput | null {
       placed = true
     }
   }
-  readFloor = readUpTo
   const last = nodes[nodes.length - 1]
+  const chapterLength = Number(last?.dataset.order ?? 0)
+  const scrollable = root.scrollHeight > root.clientHeight + 4
+  const atBottom = scrollable && root.scrollTop + root.clientHeight >= root.scrollHeight - 4
+  if (atBottom) readUpTo = Math.max(readUpTo, chapterLength)
+  else if (last && readUpTo < chapterLength) watchLast(root, last, chapterLength)
+  readFloor = readUpTo
   return {
     chapterId: chapterId.value,
     paragraphIndex,
     offsetRatio,
     readUpTo,
-    chapterLength: Number(last?.dataset.order ?? 0),
+    chapterLength,
   }
+}
+
+function lastFullyVisible(root: HTMLElement, last: HTMLElement): boolean {
+  const view = root.getBoundingClientRect()
+  const rect = last.getBoundingClientRect()
+  return rect.bottom <= view.bottom && rect.bottom > view.top
+}
+
+function watchLast(root: HTMLElement, last: HTMLElement, chapterLength: number) {
+  if (!lastFullyVisible(root, last)) {
+    window.clearTimeout(lastVisibleTimer)
+    lastVisibleTimer = 0
+    return
+  }
+  if (lastVisibleTimer) return
+  const chapter = chapterId.value
+  lastVisibleTimer = window.setTimeout(() => {
+    lastVisibleTimer = 0
+    if (chapter !== chapterId.value || !last.isConnected || !lastFullyVisible(root, last)) return
+    readFloor = Math.max(readFloor, chapterLength)
+    queueSave()
+  }, LAST_VISIBLE_MS)
 }
 
 async function flush() {
@@ -594,8 +644,9 @@ function onMark(id: string, mark: 'saved' | 'boring' | 'spoiler' | 'wrong', on: 
   void comments.mark(id, mark, on)
 }
 
-function onInteresting(id: string) {
-  void generation.markInteresting(id)
+async function onInteresting(id: string) {
+  await generation.markInteresting(id)
+  if (generation.notice) showToast(generation.notice)
 }
 
 function onHighlight(payload: { paragraphId: string; quote: string; start: number; end: number }) {
@@ -623,7 +674,8 @@ async function saveHighlightNote() {
 }
 
 async function onMicro(payload: { judgment: string; evidence: string; reservation: string }) {
-  await generation.submitMicro(payload)
+  const answered = await generation.submitMicro(payload)
+  if (!answered) showToast('微评已保存，书友暂时没接上话')
   await reloadNotes()
   const chapter = chapters.value.find((item) => item.id === chapterId.value)
   comments.setGate({
@@ -668,23 +720,26 @@ function onDanmaku(event: Event) {
   void settings.saveDisplay({ ...settings.display, danmaku: danmakuOn })
 }
 
-function imageSrcs(html: string): string[] {
-  const holder = document.createElement('div')
-  holder.innerHTML = html
-  return [...holder.querySelectorAll('img')]
-    .map((img) => img.getAttribute('src') ?? '')
-    .filter((src) => src.length > 0)
+async function onLink(href: string) {
+  const chapter = chapters.value.find((item) => item.id === chapterId.value)
+  const link = chapter ? resolveBookLink(chapter.href, href) : null
+  if (!link) return
+  if (link.kind === 'external') {
+    showToast('外部链接不在阅读器里打开')
+    return
+  }
+  const target = chapters.value.find((item) => item.href === link.path)
+  if (!target) return
+  const rows = target.id === chapterId.value ? shown.value : await listParagraphs(target.id)
+  const found = findLinkTarget(rows, link.fragment)
+  if (!found) return
+  footnote.value = { paragraphId: found.id, text: found.text, here: target.id === chapterId.value }
 }
 
-function rewriteImages(html: string, map: Map<string, string>): string {
-  const holder = document.createElement('div')
-  holder.innerHTML = html
-  for (const img of holder.querySelectorAll('img')) {
-    const src = img.getAttribute('src')
-    const next = src ? map.get(src) : undefined
-    if (next) img.setAttribute('src', next)
-  }
-  return holder.innerHTML
+function jumpToFootnote() {
+  const id = footnote.value?.paragraphId
+  footnote.value = null
+  if (id) jumpTo(id)
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {

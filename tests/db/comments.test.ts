@@ -11,7 +11,7 @@ const paragraph: ParagraphRow = {
   text: '灯灭了。',
   html: '<p>灯灭了。</p>',
   textHash: 'hash',
-  kind: 'paragraph',
+  kind: 'body',
   genStatus: 'none',
 }
 

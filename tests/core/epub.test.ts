@@ -1,6 +1,15 @@
 import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
-import { extractParagraphs, fnv1a32, parseEpub, relinkComments } from '@/core/epub'
+import {
+  extractParagraphs,
+  findLinkTarget,
+  fnv1a32,
+  imageSrcs,
+  matchParagraphs,
+  parseEpub,
+  relinkComments,
+  resolveBookLink,
+} from '@/core/epub'
 
 const container = `<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -118,22 +127,69 @@ describe('parseEpub', () => {
   })
 })
 
-describe('relinkComments', () => {
-  it('keeps comments whose anchor still exists and marks the rest mismatched', () => {
-    const linked = relinkComments(
-      [
-        { id: 'old-1', anchor: 'c.xhtml#1:aaaaaaaa' },
-        { id: 'old-2', anchor: 'c.xhtml#2:bbbbbbbb' },
-      ],
-      [{ id: 'new-1', anchor: 'c.xhtml#1:aaaaaaaa' }],
-      [
-        { id: 'comment-1', paragraphId: 'old-1' },
-        { id: 'comment-2', paragraphId: 'old-2' },
-      ],
-    )
-    expect(linked).toEqual([
-      { id: 'comment-1', paragraphId: 'new-1', mismatched: false },
-      { id: 'comment-2', paragraphId: 'old-2', mismatched: true },
+describe('matchParagraphs and relinkComments', () => {
+  const ref = (id: string, order: number, text: string, chapterHref = 'c.xhtml') => ({
+    id,
+    chapterHref,
+    order,
+    text,
+    textHash: fnv1a32(text.replace(/\s+/g, '')),
+  })
+
+  it('matches unchanged text even when it moved, and an edited paragraph by similarity', () => {
+    const previous = [ref('o1', 1, '灯灭了'), ref('o2', 2, '他推开了那扇旧门。'), ref('o3', 3, '巷口没有人。')]
+    const next = [
+      ref('n1', 1, '灯灭了'),
+      ref('n2', 2, '这是新加的一段。'),
+      ref('n3', 3, '他轻轻推开了那扇旧门。'),
+      ref('n4', 4, '巷口没有人。'),
+    ]
+    const matched = matchParagraphs(previous, next)
+    expect(Object.fromEntries(matched)).toEqual({ o1: 'n1', o2: 'n3', o3: 'n4' })
+  })
+
+  it('leaves a removed paragraph unmatched and marks its comments mismatched', () => {
+    const matched = matchParagraphs([ref('o1', 1, '灯灭了'), ref('o2', 2, '整段删掉。')], [ref('n1', 1, '灯灭了')])
+    expect(
+      relinkComments(matched, [
+        { id: 'comment-1', paragraphId: 'o1' },
+        { id: 'comment-2', paragraphId: 'o2' },
+      ]),
+    ).toEqual([
+      { id: 'comment-1', paragraphId: 'n1', mismatched: false },
+      { id: 'comment-2', paragraphId: 'o2', mismatched: true },
     ])
+  })
+})
+
+describe('untrusted chapter html', () => {
+  it('strips handlers before anything reaches the page, and keeps block ids as link targets', () => {
+    const hits: string[] = []
+    ;(globalThis as { __hit?: (tag: string) => void }).__hit = (tag) => hits.push(tag)
+    const out = extractParagraphs(
+      '<html><body><p id="fn1">注一<img src="x" onerror="__hit(\'img\')"/></p>' +
+        '<p><a href="javascript:__hit(\'a\')">点</a>正文</p></body></html>',
+    )
+    expect(out[0]?.html).toContain('id="fn1"')
+    expect(out.map((p) => p.html).join('')).not.toMatch(/onerror|javascript:/)
+    expect(imageSrcs(out[0]?.html ?? '')).toEqual(['x'])
+    expect(hits).toEqual([])
+  })
+
+  it('resolves footnote links inside the book and flags external ones', () => {
+    expect(resolveBookLink('OEBPS/Text/c1.xhtml', '../Text/notes.xhtml#fn%201')).toEqual({
+      kind: 'internal',
+      path: 'OEBPS/Text/notes.xhtml',
+      fragment: 'fn 1',
+    })
+    expect(resolveBookLink('OEBPS/c1.xhtml', '#n2')).toEqual({ kind: 'internal', path: 'OEBPS/c1.xhtml', fragment: 'n2' })
+    expect(resolveBookLink('OEBPS/c1.xhtml', 'https://example.com')).toEqual({
+      kind: 'external',
+      href: 'https://example.com',
+    })
+    expect(resolveBookLink('OEBPS/c1.xhtml', 'javascript:alert(1)')).toBeNull()
+    const rows = [{ html: '<span id="n1"></span>一' }, { html: '二<a id="n2">*</a>' }]
+    expect(findLinkTarget(rows, 'n2')).toBe(rows[1])
+    expect(findLinkTarget(rows, 'n3')).toBeUndefined()
   })
 })
