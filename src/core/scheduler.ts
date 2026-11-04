@@ -1,4 +1,4 @@
-export type TaskKind = 'live' | 'rough' | 'refine'
+export type TaskKind = 'live' | 'rough' | 'refine' | 'chapterTalk'
 
 export interface SchedulerTask {
   kind: TaskKind
@@ -7,8 +7,8 @@ export interface SchedulerTask {
   run: (signal: AbortSignal) => Promise<void>
 }
 
-const PRIORITY: Record<TaskKind, number> = { live: 0, rough: 1, refine: 2 }
-const LIMIT: Record<TaskKind, number> = { live: 1, rough: 1, refine: 2 }
+const PRIORITY: Record<TaskKind, number> = { live: 0, rough: 1, refine: 2, chapterTalk: 3 }
+const LIMIT: Record<TaskKind, number> = { live: 1, rough: 1, refine: 2, chapterTalk: 1 }
 
 interface Queued extends SchedulerTask {
   id: string
@@ -76,7 +76,7 @@ export class Scheduler {
 
   private dispatch(): void {
     if (this.paused) return
-    for (const kind of ['live', 'rough', 'refine'] as const) {
+    for (const kind of ['live', 'rough', 'refine', 'chapterTalk'] as const) {
       let active = [...this.running.keys()].filter((id) => id.startsWith(`${kind}:`)).length
       while (active < LIMIT[kind]) {
         const index = this.queued.findIndex((task) => task.kind === kind)

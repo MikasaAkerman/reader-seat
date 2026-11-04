@@ -11,12 +11,14 @@ export interface ReaderDisplay {
   fontSize: number
   lineHeight: number
   theme: ReaderTheme
+  danmaku: boolean
 }
 
 export const DEFAULT_DISPLAY: ReaderDisplay = {
   fontSize: 18,
   lineHeight: 1.85,
   theme: 'day',
+  danmaku: false,
 }
 
 const DEFAULT_BASE_URL = 'https://api.deepseek.com'
@@ -48,6 +50,7 @@ export const useSettingsStore = defineStore('settings', () => {
         fontSize: saved.fontSize,
         lineHeight: saved.lineHeight,
         theme: saved.theme,
+        danmaku: saved.danmaku === true,
       }
     }
     applyDisplay()

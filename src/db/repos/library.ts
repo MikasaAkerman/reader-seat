@@ -16,6 +16,7 @@ export interface BookSettings {
   unlockMode: UnlockMode
   lineup: Record<string, boolean>
   station: number | null
+  microReviewOpen?: boolean
 }
 
 export interface BookCard {
@@ -23,6 +24,7 @@ export interface BookCard {
   title: string
   author: string
   progress: string
+  fileMissing: boolean
 }
 
 export type ImportOutcome =
@@ -91,6 +93,7 @@ async function writeRows(bookId: string, parsed: ParsedBook, bytes: Uint8Array, 
     station: settings.station,
     spoilerLevel: settings.spoilerLevel,
     unlockMode: settings.unlockMode,
+    microReviewOpen: settings.microReviewOpen !== false,
     lineup: settings.lineup,
     createdAt,
     updatedAt: nowIso(),
@@ -193,7 +196,11 @@ function retargetState(
 export async function importBookBytes(bytes: Uint8Array, fileName: string): Promise<ImportOutcome> {
   const parsed = await parseEpubSafe(bytes, fileName)
   const existing = await db.books.where('fingerprint').equals(parsed.fingerprint).first()
-  if (existing) return { status: 'existing', bookId: existing.id }
+  if (existing) {
+    await platform.saveBookFile(existing.id, bytes)
+    if (existing.fileMissing) await db.books.update(existing.id, { fileMissing: false, updatedAt: nowIso() })
+    return { status: 'existing', bookId: existing.id }
+  }
   const sameTitle = await db.books.where('title').equals(parsed.title).first()
   if (sameTitle) {
     await replaceEdition(sameTitle, parsed, bytes)
@@ -226,7 +233,8 @@ export async function listBookCards(): Promise<BookCard[]> {
       id: book.id,
       title: book.title,
       author: book.author,
-      progress: progressLabel(chapters, state),
+      progress: book.fileMissing ? '需要重新导入文件' : progressLabel(chapters, state),
+      fileMissing: book.fileMissing === true,
     })
   }
   return cards
@@ -246,6 +254,10 @@ export async function getBook(bookId: string): Promise<BookRow | undefined> {
 export async function updateBookSettings(bookId: string, settings: BookSettings): Promise<void> {
   const updated = await db.books.update(bookId, { ...settings, updatedAt: nowIso() })
   if (updated === 0) throw new Error('找不到这本书')
+}
+
+export async function saveChapterSummary(chapterId: string, summary: string): Promise<void> {
+  await db.chapters.update(chapterId, { summary })
 }
 
 export async function listChapters(bookId: string): Promise<ChapterRow[]> {
@@ -307,6 +319,9 @@ export async function deleteBook(bookId: string): Promise<void> {
         await db.chapterTalks.where('chapterId').anyOf(chapterIds).delete()
       }
       await db.paragraphs.where('bookId').equals(bookId).delete()
+      const liveParagraphs = new Set((await db.paragraphs.toArray()).map((row) => row.id))
+      await db.comments.filter((row) => !liveParagraphs.has(row.paragraphId)).delete()
+      await db.commentBatches.filter((row) => !liveParagraphs.has(row.paragraphId)).delete()
       await db.chapters.where('bookId').equals(bookId).delete()
       await db.residentReaders.where('bookId').equals(bookId).delete()
       await db.bookMemories.delete(bookId)
@@ -323,4 +338,8 @@ export async function deleteBook(bookId: string): Promise<void> {
   } catch {
     // 浏览器里原文件就在 bookFiles，上面已经删掉。
   }
+}
+
+export async function listGenerationLogs() {
+  return db.generationLogs.toArray()
 }

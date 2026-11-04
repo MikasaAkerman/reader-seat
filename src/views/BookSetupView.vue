@@ -24,11 +24,19 @@
       </fieldset>
       <fieldset>
         <legend>先写后看</legend>
-        <p class="setup__note">先写后看会在后面的版本锁住评论，这一版只保存选择。</p>
+        <p class="setup__note">逐段模式要先写下看法才看这段评论。章末模式要读完并写微评，才解锁这一章的段评和本章说。</p>
         <VanRadioGroup :model-value="unlockMode" @update:model-value="setUnlock">
           <VanRadio name="关闭">关闭</VanRadio>
           <VanRadio name="逐段先写后看">逐段先写后看</VanRadio>
           <VanRadio name="章末解锁">章末解锁</VanRadio>
+        </VanRadioGroup>
+      </fieldset>
+      <fieldset>
+        <legend>本章微评</legend>
+        <p class="setup__note">读到章末时，微评输入默认展开或收起。阅读中还可以再打开或关闭。</p>
+        <VanRadioGroup :model-value="microReview" @update:model-value="setMicro">
+          <VanRadio name="展开">展开</VanRadio>
+          <VanRadio name="收起">收起</VanRadio>
         </VanRadioGroup>
       </fieldset>
       <label class="setup__station">
@@ -69,6 +77,7 @@ const title = ref('')
 const missing = ref(false)
 const spoilerLevel = ref<SpoilerLevel>('严格')
 const unlockMode = ref<UnlockMode>('关闭')
+const microReview = ref<'展开' | '收起'>('展开')
 const station = ref(0)
 const enabled = reactive<Record<string, boolean>>({})
 
@@ -81,6 +90,7 @@ onMounted(async () => {
   title.value = book.title
   spoilerLevel.value = book.spoilerLevel
   unlockMode.value = book.unlockMode
+  microReview.value = book.microReviewOpen === false ? '收起' : '展开'
   station.value = book.station ?? 0
   for (const persona of lineup) enabled[persona.role] = book.lineup[persona.role] !== false
 })
@@ -97,6 +107,10 @@ function setUnlock(value: string | number) {
   if (value === '关闭' || value === '逐段先写后看' || value === '章末解锁') unlockMode.value = value
 }
 
+function setMicro(value: string | number) {
+  if (value === '展开' || value === '收起') microReview.value = value
+}
+
 function onStation(event: Event) {
   station.value = Number((event.target as HTMLSelectElement).value)
 }
@@ -107,6 +121,7 @@ async function save() {
     await updateBookSettings(bookId, {
       spoilerLevel: spoilerLevel.value,
       unlockMode: unlockMode.value,
+      microReviewOpen: microReview.value === '展开',
       station: station.value || null,
       lineup: { ...enabled },
     })
@@ -114,7 +129,7 @@ async function save() {
     showToast(err instanceof Error ? err.message : '保存失败')
     return
   }
-  await router.push({ name: 'reader', params: { bookId } })
+  await router.replace({ name: 'reader', params: { bookId } })
 }
 
 function goLibrary() {

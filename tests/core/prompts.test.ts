@@ -10,9 +10,9 @@ const rough = buildRoughPrompt({
   knownEntities: [],
 })
 
-describe('prompts v2', () => {
-  it('is version 2 and lists banned phrases', () => {
-    expect(PROMPT_VERSION).toBe(2)
+describe('prompts v4', () => {
+  it('is version 4 and lists banned phrases', () => {
+    expect(PROMPT_VERSION).toBe(4)
     const system = rough[0]?.content ?? ''
     for (const phrase of BANNED_PHRASES) expect(system).toContain(phrase)
     expect(system).toContain('"paragraphs"')

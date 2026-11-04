@@ -107,10 +107,44 @@ describe('library import', () => {
     expect((await getReadingState(created.bookId))?.offsetRatio).toBe(0.25)
     expect((await db.chapters.get(chapter?.id ?? ''))?.readStatus).toBe('done')
 
+    await db.bookMemories.put({
+      bookId: created.bookId,
+      nicknames: [],
+      predictions: [],
+      debates: [],
+      entities: [],
+      updatedAt: new Date().toISOString(),
+    })
     await deleteBook(created.bookId)
     expect(await db.books.count()).toBe(0)
     expect(await db.paragraphs.count()).toBe(0)
+    expect(await db.comments.count()).toBe(0)
+    expect(await db.bookMemories.count()).toBe(0)
     expect(await db.bookFiles.count()).toBe(0)
+  })
+
+  it('reattaches the same file without dropping comments', async () => {
+    const bytes = await epub('原来的句子。')
+    const created = await importBookBytes(bytes, '巷口.epub')
+    const paragraph = await db.paragraphs.where('bookId').equals(created.bookId).first()
+    await db.comments.add({
+      id: 'kept-comment',
+      batchId: 'batch',
+      paragraphId: paragraph?.id ?? '',
+      parentId: '',
+      authorType: 'user',
+      displayName: '我',
+      role: '',
+      text: '留下',
+    })
+    await db.bookFiles.delete(created.bookId)
+    await db.books.update(created.bookId, { fileMissing: true })
+
+    const again = await importBookBytes(bytes, '巷口.epub')
+    expect(again).toEqual({ status: 'existing', bookId: created.bookId })
+    expect(await db.bookFiles.get(created.bookId)).toBeTruthy()
+    expect((await getBook(created.bookId))?.fileMissing).toBe(false)
+    expect(await db.comments.get('kept-comment')).toMatchObject({ text: '留下' })
   })
 
   it('does not write anything when the file is not an epub', async () => {

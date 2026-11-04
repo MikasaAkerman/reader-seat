@@ -3,6 +3,7 @@
     <VanNavBar :title="book?.title || '阅读'" left-arrow @click-left="goLibrary">
       <template #right>
         <button class="reader__tool" type="button" @click="tocOpen = true">目录</button>
+        <button class="reader__tool" type="button" @click="goArchive">档案</button>
         <button class="reader__tool" type="button" @click="displayOpen = !displayOpen">Aa</button>
       </template>
     </VanNavBar>
@@ -35,6 +36,11 @@
         <button type="button" @click="onTheme('eye')">护眼</button>
         <button type="button" @click="onTheme('night')">夜间</button>
       </div>
+      <label class="reader__toggle">
+        <input type="checkbox" :checked="settings.display.danmaku" @change="onDanmaku" />
+        热段弹幕
+      </label>
+      <button type="button" @click="notesOpen = true">批注 {{ chapterNotes.length }}</button>
     </div>
 
     <p v-if="generation.needsKey" class="reader__key">
@@ -48,9 +54,22 @@
       <div ref="scrollEl" class="reader__scroll" @scroll="onScroll">
         <ChapterContent
           :title="chapterTitle"
+          :comments-hidden="comments.chapterLocked"
           :paragraphs="shown"
           :bubbles="comments.bubbles"
           @open="openComments"
+          @interesting="onInteresting"
+          @highlight="onHighlight"
+        />
+        <ChapterTalk
+          :hidden="comments.chapterLocked"
+          :replying="generation.replying"
+          :talk="generation.chapterTalk"
+          :micro="micro"
+          :default-open="book?.microReviewOpen !== false"
+          :openings="openings"
+          @jump="jumpTo"
+          @submit="onMicro"
         />
         <div class="reader__pager">
           <button type="button" :disabled="!prevChapter" @click="goChapter(prevChapter?.id)">上一章</button>
@@ -63,7 +82,23 @@
           :threads="comments.threads"
           :pending="panelPending"
           :failed="panelFailed"
+          :replying="generation.replying"
+          :reply-failed="generation.replyFailed"
+          :residents="residents"
+          :reply-to="replyTo"
+          :locked="panelLocked"
+          :batch-no="comments.batchNo"
+          :batch-count="comments.batchCount"
+          :rerolls-left="comments.rerollsLeft"
+          :reroll-message="generation.rerollMessage"
           @retry="onRetry(comments.activeId)"
+          @retry-reply="generation.retryReply()"
+          @reply="startReply"
+          @cancel-reply="replyTo = null"
+          @mark="onMark"
+          @submit="onSubmit"
+          @reroll="onReroll"
+          @batch="onBatch"
           @close="closeComments"
         />
         <template v-else>
@@ -88,9 +123,46 @@
         :threads="comments.threads"
         :pending="panelPending"
         :failed="panelFailed"
+        :replying="generation.replying"
+        :reply-failed="generation.replyFailed"
+        :residents="residents"
+        :reply-to="replyTo"
+        :locked="panelLocked"
+        :batch-no="comments.batchNo"
+        :batch-count="comments.batchCount"
+        :rerolls-left="comments.rerollsLeft"
+        :reroll-message="generation.rerollMessage"
         @retry="onRetry(comments.activeId)"
+        @retry-reply="generation.retryReply()"
+        @reply="startReply"
+        @cancel-reply="replyTo = null"
+        @mark="onMark"
+        @submit="onSubmit"
+        @reroll="onReroll"
+        @batch="onBatch"
         @close="closeComments"
       />
+    </VanPopup>
+
+    <button v-if="danmaku" class="reader__danmaku" type="button" @click="openDanmaku">
+      {{ danmaku.text }}
+    </button>
+
+    <VanPopup v-model:show="notesOpen" position="bottom" :lock-scroll="false" class="reader__sheet">
+      <section class="reader__notes">
+        <h2>这一章的批注</h2>
+        <p v-if="chapterNotes.length === 0">还没有划线。</p>
+        <p v-for="note in chapterNotes" :key="note.id">「{{ note.quote }}」 {{ note.text }}</p>
+      </section>
+    </VanPopup>
+
+    <VanPopup v-model:show="highlightOpen" position="bottom" :lock-scroll="false" class="reader__sheet">
+      <form class="reader__notes" @submit.prevent="saveHighlightNote">
+        <h2>划线批注</h2>
+        <p v-if="highlightDraft">「{{ highlightDraft.quote }}」</p>
+        <textarea v-model="noteText" rows="3" placeholder="写一句批注" />
+        <button type="submit" :disabled="!noteText.trim()">保存</button>
+      </form>
     </VanPopup>
 
     <VanPopup v-model:show="tocOpen" position="left" :lock-scroll="false" class="reader__toc">
@@ -108,8 +180,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NavBar as VanNavBar, Popup as VanPopup } from 'vant'
 import { loadChapterImages } from '@/core/epub'
+import { paragraphOpening } from '@/core/export/markdown'
+import { lineupFor } from '@/core/generation/pipeline'
 import ChapterContent from '@/components/reader/ChapterContent.vue'
+import ChapterTalk from '@/components/reader/ChapterTalk.vue'
 import CommentPanel from '@/components/reader/CommentPanel.vue'
+import { shortReaction } from '@/db/repos/comments'
 import {
   getBook,
   getReadingState,
@@ -118,7 +194,8 @@ import {
   recordProgress,
   type ProgressInput,
 } from '@/db/repos/library'
-import type { BookRow, ChapterRow, ParagraphRow, ReadingStateRow } from '@/db/schema'
+import { listNotes, saveHighlight } from '@/db/repos/notes'
+import type { BookRow, ChapterRow, ParagraphRow, ReadingStateRow, UserNoteRow } from '@/db/schema'
 import { platform } from '@/platform'
 import { useCommentsStore } from '@/stores/comments'
 import { useGenerationStore } from '@/stores/generation'
@@ -137,16 +214,34 @@ const error = ref('')
 const tocOpen = ref(false)
 const displayOpen = ref(false)
 const panelOpen = ref(false)
+const notesOpen = ref(false)
+const replyTo = ref<{ id: string; name: string } | null>(null)
 const wide = ref(false)
+const chapterNotes = ref<UserNoteRow[]>([])
+const micro = ref<{ judgment: string; evidence: string; reservation: string } | null>(null)
+const highlightDraft = ref<{ paragraphId: string; quote: string; start: number; end: number } | null>(null)
+const noteText = ref('')
+const danmaku = ref<{ paragraphId: string; text: string } | null>(null)
+const highlightOpen = computed({
+  get: () => highlightDraft.value !== null,
+  set: (open: boolean) => {
+    if (!open) highlightDraft.value = null
+  },
+})
 const urls: string[] = []
 let scrollSnapshot = 0
 let media: MediaQueryList | null = null
+let danmakuUntil = 0
+let lastScrollTop = 0
+let lastScrollAt = 0
+let scrollingFast = false
 
 function applyWide() {
   wide.value = media?.matches ?? false
 }
 
 let observer: IntersectionObserver | null = null
+let loadToken = 0
 let readFloor = 0
 let ignore = false
 let timer = 0
@@ -164,6 +259,15 @@ const prevChapter = computed(() => chapters.value[chapterIndex.value - 1])
 const nextChapter = computed(() => chapters.value[chapterIndex.value + 1])
 const panelPending = computed(() => comments.bubbles[comments.activeId]?.pending ?? false)
 const panelFailed = computed(() => comments.bubbles[comments.activeId]?.failed ?? false)
+const panelLocked = computed(() => comments.bubbles[comments.activeId]?.locked === true)
+const openings = computed(() => {
+  const map: Record<string, string> = {}
+  for (const paragraph of shown.value) map[paragraph.id] = paragraphOpening(paragraph.text)
+  return map
+})
+const residents = computed(() =>
+  lineupFor(book.value?.spoilerLevel ?? '严格', book.value?.lineup).map((persona) => persona.role),
+)
 
 onMounted(() => {
   generation.bind()
@@ -181,6 +285,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  loadToken += 1
   observer?.disconnect()
   revokeUrls()
   generation.stop()
@@ -189,22 +294,26 @@ onBeforeUnmount(() => {
 })
 
 async function load() {
+  const token = ++loadToken
   error.value = ''
-  const found = await getBook(bookId.value)
+  const id = bookId.value
+  const found = await getBook(id)
+  if (token !== loadToken) return
   if (!found) {
     error.value = '找不到这本书'
     return
   }
   book.value = found
-  chapters.value = await listChapters(bookId.value)
-  const state = await getReadingState(bookId.value)
+  chapters.value = await listChapters(id)
+  if (token !== loadToken || route.name !== 'reader') return
+  const state = await getReadingState(id)
   const target = chapterId.value || state?.chapterId || chapters.value[0]?.id || ''
   if (!target) {
     error.value = '这本书没有章节'
     return
   }
   if (target !== chapterId.value) {
-    await router.replace({ name: 'reader', params: { bookId: bookId.value, chapterId: target } })
+    await router.replace({ name: 'reader', params: { bookId: id, chapterId: target } })
     return
   }
   await showChapter(target, state)
@@ -245,6 +354,13 @@ async function showChapter(id: string, state: ReadingStateRow | undefined) {
     ignore = false
   })
   const order = state?.chapterId === id ? state.paragraphIndex : 1
+  comments.setGate({
+    bookId: bookId.value,
+    mode: book.value?.unlockMode ?? '关闭',
+    chapterDone: chapter?.readStatus === 'done',
+  })
+  await reloadNotes()
+  await generation.loadTalk(id)
   await generation.sync({ bookId: bookId.value, chapterId: id, order })
 }
 
@@ -271,6 +387,7 @@ function bindObserver() {
         const index = Number((entry.target as HTMLElement).dataset.order)
         if (!Number.isFinite(index)) continue
         if (entry.boundingClientRect.bottom <= top + 1) readFloor = Math.max(readFloor, index)
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) maybeDanmaku(entry.target as HTMLElement)
       }
       queueSave()
     },
@@ -280,7 +397,38 @@ function bindObserver() {
 }
 
 function onScroll() {
+  const root = scrollEl.value
+  const now = performance.now()
+  const top = root?.scrollTop ?? 0
+  const elapsed = now - lastScrollAt
+  if (lastScrollAt > 0 && elapsed > 0) scrollingFast = Math.abs(top - lastScrollTop) / elapsed > 1.2
+  lastScrollTop = top
+  lastScrollAt = now
   queueSave()
+}
+
+function maybeDanmaku(node: HTMLElement) {
+  if (!settings.display.danmaku || comments.chapterLocked) return
+  if (danmaku.value || Date.now() < danmakuUntil || scrollingFast) return
+  const id = node.closest('[data-paragraph-id]')?.getAttribute('data-paragraph-id') ?? ''
+  if (!id || comments.bubbles[id]?.hot !== true) return
+  void showDanmaku(id)
+}
+
+async function showDanmaku(id: string) {
+  if (danmaku.value || Date.now() < danmakuUntil) return
+  const reaction = await shortReaction(id)
+  if (!reaction || danmaku.value || Date.now() < danmakuUntil) return
+  danmaku.value = { paragraphId: id, text: reaction.text }
+  danmakuUntil = Date.now() + 3000
+  window.setTimeout(() => {
+    if (danmaku.value?.paragraphId === id) danmaku.value = null
+  }, 3000)
+}
+
+function openDanmaku() {
+  const id = danmaku.value?.paragraphId
+  if (id) void openComments(id)
 }
 
 function queueSave() {
@@ -339,20 +487,53 @@ async function flush() {
     chapterId: payload.chapterId,
     order: payload.paragraphIndex,
   })
+  if (payload.chapterLength > 0 && payload.readUpTo >= payload.chapterLength) {
+    const finished = chapters.value.find((item) => item.id === payload.chapterId)
+    if (finished) finished.readStatus = 'done'
+    comments.setGate({
+      bookId: bookId.value,
+      mode: book.value?.unlockMode ?? '关闭',
+      chapterDone: true,
+    })
+    await generation.finishChapter(payload.chapterId)
+    await comments.loadChapter(payload.chapterId, new Set(generation.pendingIds))
+    await generation.loadTalk(payload.chapterId)
+  }
 }
 
 function goChapter(id: string | undefined) {
-  if (!id) return
+  if (!id || id === chapterId.value) return
   tocOpen.value = false
-  void router.push({ name: 'reader', params: { bookId: bookId.value, chapterId: id } })
+  void router.replace({ name: 'reader', params: { bookId: bookId.value, chapterId: id } })
 }
 
 function goLibrary() {
-  void router.push({ name: 'library' })
+  loadToken += 1
+  tocOpen.value = false
+  panelOpen.value = false
+  displayOpen.value = false
+  void router.replace({ name: 'library' })
 }
 
 function goSettings() {
   void router.push({ name: 'settings' })
+}
+
+function goArchive() {
+  void router.push({ name: 'archive', params: { bookId: bookId.value } })
+}
+
+async function reloadNotes() {
+  const rows = await listNotes(bookId.value)
+  chapterNotes.value = rows.filter((note) => note.chapterId === chapterId.value && note.type === '划线批注')
+  const row = rows.find((note) => note.chapterId === chapterId.value && note.type === '本章微评')
+  micro.value = row
+    ? {
+        judgment: row.judgment ?? '',
+        evidence: row.evidence ?? '',
+        reservation: row.reservation ?? '',
+      }
+    : null
 }
 
 function holdScroll() {
@@ -394,6 +575,80 @@ function onRetry(id: string) {
   void generation.retry(id)
 }
 
+function startReply(id: string, name: string) {
+  replyTo.value = { id, name }
+}
+
+function onSubmit(payload: { text: string; mention: string }) {
+  if (!comments.activeId) return
+  void generation.postComment({
+    paragraphId: comments.activeId,
+    text: payload.text,
+    parentId: replyTo.value?.id,
+    mention: payload.mention || undefined,
+  })
+  replyTo.value = null
+}
+
+function onMark(id: string, mark: 'saved' | 'boring' | 'spoiler' | 'wrong', on: boolean) {
+  void comments.mark(id, mark, on)
+}
+
+function onInteresting(id: string) {
+  void generation.markInteresting(id)
+}
+
+function onHighlight(payload: { paragraphId: string; quote: string; start: number; end: number }) {
+  highlightDraft.value = payload
+  noteText.value = ''
+}
+
+async function saveHighlightNote() {
+  const draft = highlightDraft.value
+  const text = noteText.value.trim()
+  if (!draft || !text) return
+  await saveHighlight({
+    bookId: bookId.value,
+    chapterId: chapterId.value,
+    paragraphId: draft.paragraphId,
+    quote: draft.quote,
+    text,
+    start: draft.start,
+    end: draft.end,
+  })
+  highlightDraft.value = null
+  noteText.value = ''
+  await reloadNotes()
+  await comments.loadChapter(chapterId.value, new Set(generation.pendingIds))
+}
+
+async function onMicro(payload: { judgment: string; evidence: string; reservation: string }) {
+  await generation.submitMicro(payload)
+  await reloadNotes()
+  const chapter = chapters.value.find((item) => item.id === chapterId.value)
+  comments.setGate({
+    bookId: bookId.value,
+    mode: book.value?.unlockMode ?? '关闭',
+    chapterDone: chapter?.readStatus === 'done',
+  })
+  await comments.loadChapter(chapterId.value, new Set(generation.pendingIds))
+}
+
+async function onReroll() {
+  const id = comments.activeId
+  if (!id) return
+  await generation.reroll(id)
+  await comments.open(id)
+}
+
+function onBatch(offset: number) {
+  void comments.showBatch(offset)
+}
+
+function jumpTo(id: string) {
+  scrollEl.value?.querySelector(`[data-paragraph-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' })
+}
+
 function onFont(event: Event) {
   const fontSize = Number((event.target as HTMLInputElement).value)
   void settings.saveDisplay({ ...settings.display, fontSize })
@@ -406,6 +661,11 @@ function onLine(event: Event) {
 
 function onTheme(theme: ReaderTheme) {
   void settings.saveDisplay({ ...settings.display, theme })
+}
+
+function onDanmaku(event: Event) {
+  const danmakuOn = (event.target as HTMLInputElement).checked
+  void settings.saveDisplay({ ...settings.display, danmaku: danmakuOn })
 }
 
 function imageSrcs(html: string): string[] {
@@ -448,6 +708,11 @@ function revokeUrls() {
   color: var(--rs-text);
 }
 
+.reader :deep(.van-nav-bar) {
+  position: relative;
+  z-index: 3000;
+}
+
 .reader__tool {
   border: 0;
   background: transparent;
@@ -471,6 +736,13 @@ function revokeUrls() {
     font-size: 13px;
     color: var(--rs-muted);
   }
+}
+
+.reader__toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .reader__themes {
@@ -536,6 +808,28 @@ function revokeUrls() {
 
   button:disabled {
     opacity: 0.4;
+  }
+}
+
+.reader__danmaku {
+  flex: none;
+  margin: 0 16px 12px;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--rs-surface);
+  color: var(--rs-text);
+  text-align: left;
+  opacity: 0.92;
+}
+
+.reader__notes {
+  padding: 16px;
+
+  textarea {
+    display: block;
+    width: 100%;
+    margin: 8px 0;
   }
 }
 

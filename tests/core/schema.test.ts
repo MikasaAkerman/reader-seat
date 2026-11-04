@@ -94,7 +94,11 @@ describe('generation schemas', () => {
         {
           pid: 'p1',
           score: '2',
-          comments: [{ author_type: 'resident', reader_role: '毒舌', text: '还行' }],
+          background_note: false,
+          comments: [
+            { author_type: 'resident', reader_role: '毒舌', text: '还行' },
+            { author_type: 'narrator', text: '也说一句' },
+          ],
         },
       ],
     })
@@ -103,6 +107,8 @@ describe('generation schemas', () => {
     expect(data.paragraphs[0]?.comments[0]?.reaction_type).toBe('')
     expect(data.paragraphs[0]?.comments[0]?.stance).toBe('')
     expect(data.paragraphs[0]?.comments[0]?.uses_outside_plot).toBe(false)
+    expect(data.paragraphs[0]?.comments[1]?.author_type).toBe('passerby')
+    expect(data.paragraphs[0]?.background_note).toBeNull()
     expect(data.new_entities).toEqual([])
   })
 })

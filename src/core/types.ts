@@ -23,11 +23,24 @@ export interface DebateEntry {
   sides: Record<string, string>
 }
 
+export interface SceneEntry {
+  label: string
+  chapterOrder?: number
+}
+
+export interface StanceEntry {
+  role: string
+  stance: string
+}
+
 export interface BookMemory {
   bookId: string
   nicknames: NicknameEntry[]
   predictions: Prediction[]
   debates: DebateEntry[]
+  scenes: SceneEntry[]
+  stances: StanceEntry[]
+  userStance: string[]
   updatedAt: string
 }
 

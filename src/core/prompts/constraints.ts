@@ -1,4 +1,4 @@
-export const PROMPT_VERSION = 2
+export const PROMPT_VERSION = 4
 
 export const BANNED_PHRASES = [
   '这一段非常精彩',

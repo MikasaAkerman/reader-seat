@@ -14,6 +14,7 @@ export interface RefinePromptContext {
   hotReason: string
   residentState: string
   lineupText?: string
+  tasteExamples?: string
 }
 
 export function buildRefinePrompt(ctx: RefinePromptContext): ChatMessage[] {
@@ -40,7 +41,7 @@ export function buildRefinePrompt(ctx: RefinePromptContext): ChatMessage[] {
     },
     {
       role: 'user',
-      content: `热段 ${ctx.pid}。被评为热段的原因：${ctx.hotReason}\n\n文本（只到该段）\n${ctx.textUntilHot}`,
+      content: `热段 ${ctx.pid}。被评为热段的原因：${ctx.hotReason}\n用户口味示例：${ctx.tasteExamples || '（无）'}\n\n文本（只到该段）\n${ctx.textUntilHot}`,
     },
   ]
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { bubbleFor, listThreads, saveParagraphComments, threadsFrom } from '@/db/repos/comments'
+import { bubbleFor, listThreads, saveParagraphComments, setCommentMark, threadsFrom } from '@/db/repos/comments'
 import { db, type CommentRow, type ParagraphRow } from '@/db/schema'
 
 const paragraph: ParagraphRow = {
@@ -86,9 +86,46 @@ describe('comment batches', () => {
         role: '考据癖',
         text: '前排',
       },
+      {
+        id: 'c',
+        batchId: 'b',
+        paragraphId: 'p1',
+        parentId: '',
+        authorType: 'user',
+        displayName: '我',
+        role: '',
+        text: '最上',
+      },
+      {
+        id: 'd',
+        batchId: 'b',
+        paragraphId: 'p1',
+        parentId: '',
+        authorType: 'resident',
+        displayName: '剧透',
+        role: '毒舌',
+        text: '后文',
+        spoiler: true,
+      },
     ]
-    expect(threadsFrom(comments).map((thread) => thread.displayName)).toEqual(['考据癖', '路人'])
-    expect(bubbleFor('failed', 2, 1, false)?.failed).toBe(true)
-    expect(bubbleFor('failed', 2, 1, false)?.count).toBe(0)
+    expect(threadsFrom(comments.filter((comment) => !comment.spoiler)).map((thread) => thread.displayName)).toEqual([
+      '我',
+      '考据癖',
+      '路人',
+    ])
+    expect(bubbleFor('failed', 2, 0, false)?.failed).toBe(true)
+    expect(bubbleFor('failed', 2, 0, false)?.count).toBe(0)
+  })
+
+  it('hides a comment once it is marked as a spoiler', async () => {
+    await saveParagraphComments(
+      'p1',
+      [{ authorType: 'resident', displayName: '毒舌', role: '毒舌', text: '后文才揭晓' }],
+      2,
+      'rough',
+    )
+    const [thread] = await listThreads('p1')
+    await setCommentMark(thread?.id ?? '', 'spoiler', true)
+    expect(await listThreads('p1')).toEqual([])
   })
 })

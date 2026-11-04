@@ -2,46 +2,107 @@
   <!-- 段落 html 在导入时已经过 DOMPurify -->
   <!-- eslint-disable vue/no-v-html -->
   <article class="chapter">
-    <h1 class="chapter__title">{{ title }}</h1>
-    <div v-for="paragraph in paragraphs" :key="paragraph.id" class="chapter__block">
+    <h1 v-if="title && !titleRepeated" class="chapter__title">{{ title }}</h1>
+    <div
+      v-for="paragraph in paragraphs"
+      :key="paragraph.id"
+      class="chapter__block"
+      :data-paragraph-id="paragraph.id"
+      @pointerdown="onPointerDown(paragraph, $event)"
+      @pointerup="onPointerUp"
+      @pointercancel="cancelPress"
+    >
       <div
         class="chapter__p"
         :class="{ 'chapter__p--heading': paragraph.kind === 'heading' }"
         :data-order="paragraph.order"
         v-html="paragraph.html"
       />
-      <ParagraphBubble
-        v-if="bubbles[paragraph.id] && !bubbles[paragraph.id]?.failed"
-        :count="bubbles[paragraph.id]?.count ?? 0"
-        :hot="bubbles[paragraph.id]?.hot ?? false"
-        :pending="bubbles[paragraph.id]?.pending ?? false"
-        @open="emit('open', paragraph.id)"
-      />
-      <button
-        v-else-if="bubbles[paragraph.id]?.failed"
-        class="chapter__retry"
-        type="button"
-        @click="emit('open', paragraph.id)"
-      >
-        生成失败
-      </button>
+      <template v-if="!commentsHidden">
+        <ParagraphBubble
+          v-if="bubbles[paragraph.id] && !bubbles[paragraph.id]?.failed"
+          :count="bubbles[paragraph.id]?.count ?? 0"
+          :hot="bubbles[paragraph.id]?.hot ?? false"
+          :pending="bubbles[paragraph.id]?.pending ?? false"
+          :locked="bubbles[paragraph.id]?.locked ?? false"
+          @open="emit('open', paragraph.id)"
+        />
+        <button
+          v-else-if="bubbles[paragraph.id]?.failed"
+          class="chapter__retry"
+          type="button"
+          @click="emit('open', paragraph.id)"
+        >
+          生成失败
+        </button>
+        <button v-else class="chapter__write" type="button" @click="emit('open', paragraph.id)">段评</button>
+      </template>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { BubbleState } from '@/db/repos/comments'
 import type { ParagraphKind } from '@/db/schema'
 import ParagraphBubble from './ParagraphBubble.vue'
 
-defineProps<{
+const props = defineProps<{
   title: string
-  paragraphs: { id: string; order: number; kind: ParagraphKind; html: string }[]
+  commentsHidden?: boolean
+  paragraphs: { id: string; order: number; kind: ParagraphKind; html: string; text: string }[]
   bubbles: Record<string, BubbleState>
 }>()
 
+let pressTimer = 0
+
+function cancelPress() {
+  window.clearTimeout(pressTimer)
+  pressTimer = 0
+}
+
+function onPointerDown(
+  paragraph: { id: string; kind: ParagraphKind },
+  event: PointerEvent,
+) {
+  cancelPress()
+  if (props.commentsHidden || paragraph.kind === 'heading') return
+  if (event.target instanceof Element && event.target.closest('button')) return
+  pressTimer = window.setTimeout(() => emit('interesting', paragraph.id), 600)
+}
+
+function onPointerUp() {
+  cancelPress()
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed) return
+  const quote = selection.toString().replace(/\s+/g, '')
+  if (!quote) return
+  const anchor = selection.anchorNode?.parentElement?.closest('[data-paragraph-id]')
+  const focus = selection.focusNode?.parentElement?.closest('[data-paragraph-id]')
+  if (!anchor || anchor !== focus) return
+  const paragraphId = anchor.getAttribute('data-paragraph-id') ?? ''
+  const paragraph = props.paragraphs.find((item) => item.id === paragraphId)
+  if (!paragraph) return
+  const start = paragraph.text.replace(/\s+/g, '').indexOf(quote)
+  if (start < 0) return
+  emit('highlight', { paragraphId, quote, start, end: start + quote.length })
+  selection.removeAllRanges()
+}
+
+const titleRepeated = computed(() => {
+  const first = props.paragraphs[0]
+  if (!first || first.kind !== 'heading') return false
+  return compact(first.text) === compact(props.title)
+})
+
+function compact(value: string): string {
+  return value.replace(/\s+/g, '')
+}
+
 const emit = defineEmits<{
   open: [id: string]
+  interesting: [id: string]
+  highlight: [payload: { paragraphId: string; quote: string; start: number; end: number }]
 }>()
 </script>
 
@@ -72,7 +133,8 @@ const emit = defineEmits<{
   font-weight: 700;
 }
 
-.chapter__retry {
+.chapter__retry,
+.chapter__write {
   margin: -0.4em 0 1em;
   border: 0;
   background: transparent;

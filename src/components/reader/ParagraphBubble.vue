@@ -1,12 +1,12 @@
 <template>
   <button
     class="bubble"
-    :class="{ 'bubble--hot': hot, 'bubble--pending': pending }"
+    :class="{ 'bubble--hot': hot, 'bubble--pending': pending, 'bubble--locked': locked }"
     type="button"
-    :aria-label="pending ? '书友正在写' : `段评 ${count}`"
+    :aria-label="pending ? '书友正在写' : locked ? `段评 ${count}，先写后看` : `段评 ${count}`"
     @click="emit('open')"
   >
-    {{ pending ? '…' : count }}
+    {{ pending ? '…' : locked ? `${count} 锁` : count }}
   </button>
 </template>
 
@@ -15,6 +15,7 @@ defineProps<{
   count: number
   hot: boolean
   pending: boolean
+  locked?: boolean
 }>()
 
 const emit = defineEmits<{

@@ -1,1 +1,10 @@
-export { applyMemoryUpdates, emptyMemory, formatMemoryForPrompt } from './apply'
+export {
+  applyMemoryUpdates,
+  emptyMemory,
+  formatMemoryForPrompt,
+  mergeChapterSummary,
+  noteUserStance,
+  priorSummaryFrom,
+  resolvePredictions,
+  snapshotForPrompt,
+} from './apply'

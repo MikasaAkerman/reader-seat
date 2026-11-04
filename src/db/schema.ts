@@ -1,5 +1,14 @@
 import Dexie, { type EntityTable } from 'dexie'
-import type { AuthorType, DebateEntry, NicknameEntry, Prediction, SpoilerLevel, UnlockMode } from '@/core/types'
+import type {
+  AuthorType,
+  DebateEntry,
+  NicknameEntry,
+  Prediction,
+  SceneEntry,
+  SpoilerLevel,
+  StanceEntry,
+  UnlockMode,
+} from '@/core/types'
 
 export type ReadStatus = 'unread' | 'reading' | 'done'
 export type GenStatus = 'none' | 'rough' | 'refining' | 'refined' | 'failed'
@@ -19,9 +28,12 @@ export interface BookRow {
   station: number | null
   spoilerLevel: SpoilerLevel
   unlockMode: UnlockMode
+  /** 章末微评输入是否默认展开。缺省为展开。 */
+  microReviewOpen?: boolean
   lineup: Record<string, boolean>
   createdAt: string
   updatedAt: string
+  fileMissing?: boolean
 }
 
 export interface ChapterRow {
@@ -31,6 +43,7 @@ export interface ChapterRow {
   href: string
   title: string
   readStatus: ReadStatus
+  summary?: string
 }
 
 export interface ParagraphRow {
@@ -46,6 +59,7 @@ export interface ParagraphRow {
   genStatus: GenStatus
   /** 0 到 3。还没生成时缺省。 */
   score?: number | null
+  userMarked?: 'interesting'
 }
 
 export interface ReadingStateRow {
@@ -83,6 +97,10 @@ export interface CommentRow {
   /** 同一批里的写入顺序，用来稳定楼中楼的前两条 */
   seq?: number
   mismatched?: boolean
+  saved?: boolean
+  boring?: boolean
+  spoiler?: boolean
+  wrong?: boolean
 }
 
 export interface BookMemoryRow {
@@ -90,6 +108,9 @@ export interface BookMemoryRow {
   nicknames: NicknameEntry[]
   predictions: Prediction[]
   debates: DebateEntry[]
+  scenes?: SceneEntry[]
+  stances?: StanceEntry[]
+  userStance?: string[]
   entities: string[]
   updatedAt: string
 }
@@ -97,7 +118,7 @@ export interface BookMemoryRow {
 export interface GenerationLogRow {
   id: string
   bookId: string
-  type: 'rough' | 'refine' | 'live'
+  type: 'rough' | 'refine' | 'live' | 'chapterTalk' | 'spoilerCheck'
   createdAt: string
   ok: boolean
   promptTokens: number
@@ -105,6 +126,41 @@ export interface GenerationLogRow {
   cacheHitTokens: number
   cost: number
   error?: string
+  latencyMs?: number
+}
+
+export interface UserNoteRow {
+  id: string
+  bookId: string
+  chapterId: string
+  paragraphId: string
+  type: '划线批注' | '本章微评'
+  text: string
+  quote?: string
+  start?: number
+  end?: number
+  judgment?: string
+  evidence?: string
+  reservation?: string
+  createdAt: string
+}
+
+export interface TalkLine {
+  role: string
+  text: string
+}
+
+export interface ChapterTalkRow {
+  id: string
+  bookId: string
+  chapterId: string
+  paragraphId: string
+  hotParagraphIds: string[]
+  residentLines: TalkLine[]
+  debates: { topic: string; summary: string }[]
+  predictionUpdates: { predictionId: string; status: string }[]
+  replies: TalkLine[]
+  createdAt: string
 }
 
 /** 只为按已有索引删除关联行，字段在后续里程碑补全。 */
@@ -124,8 +180,8 @@ export class ReaderSeatDB extends Dexie {
   predictions!: EntityTable<ScopedRow, 'id'>
   commentBatches!: EntityTable<CommentBatchRow, 'id'>
   comments!: EntityTable<CommentRow, 'id'>
-  userNotes!: EntityTable<ScopedRow, 'id'>
-  chapterTalks!: EntityTable<ScopedRow, 'id'>
+  userNotes!: EntityTable<UserNoteRow, 'id'>
+  chapterTalks!: EntityTable<ChapterTalkRow, 'id'>
   readingStates!: EntityTable<ReadingStateRow, 'bookId'>
   generationLogs!: EntityTable<GenerationLogRow, 'id'>
   settings!: EntityTable<SettingsRow, 'key'>
