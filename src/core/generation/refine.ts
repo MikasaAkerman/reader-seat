@@ -1,4 +1,4 @@
-import type { LlmClient } from '../llm'
+import type { LlmClient, LlmUsage } from '../llm'
 import { buildRefinePrompt, type RefinePromptContext } from '../prompts'
 import type { TextBlock } from '../types'
 import { filterByEntityRule } from './entities'
@@ -27,11 +27,13 @@ export async function runRefine(
   client: LlmClient,
   knownEntities: Set<string>,
   newEntities: string[],
-): Promise<RefineResult> {
-  const { data } = await client.chatJson(buildRefinePrompt(ctx), refineResultSchema, {
+  signal?: AbortSignal,
+): Promise<RefineResult & { usage: LlmUsage }> {
+  const { data, usage } = await client.chatJson(buildRefinePrompt(ctx), refineResultSchema, {
     temperature: 1.3,
     maxTokens: 2000,
     timeoutMs: 60_000,
+    signal,
   })
   const index = pidToIndex(data.pid)
   const threads = data.threads
@@ -42,5 +44,5 @@ export async function runRefine(
         keepComment(reply, index, block, knownEntities, newEntities),
       ),
     }))
-  return { ...data, threads }
+  return { ...data, threads, usage }
 }

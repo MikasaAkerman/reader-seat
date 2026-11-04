@@ -33,6 +33,10 @@ function parseUsage(raw: unknown): LlmUsage {
   }
 }
 
+function isAbort(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError'
+}
+
 async function withRetry<T>(fn: () => Promise<T>, retries = 1): Promise<T> {
   let lastError: unknown
   for (let i = 0; i <= retries; i++) {
@@ -40,6 +44,7 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 1): Promise<T> {
       return await fn()
     } catch (err) {
       lastError = err
+      if (isAbort(err)) break
       if (i < retries) await sleep(2000)
     }
   }

@@ -37,21 +37,61 @@
       </div>
     </div>
 
+    <p v-if="generation.needsKey" class="reader__key">
+      还没有 API Key，书友先不说话。
+      <button type="button" @click="goSettings">去设置</button>
+    </p>
+
     <p v-if="error" class="reader__hint">{{ error }}</p>
 
     <div v-else class="reader__body">
       <div ref="scrollEl" class="reader__scroll" @scroll="onScroll">
-        <ChapterContent :title="chapterTitle" :paragraphs="shown" />
+        <ChapterContent
+          :title="chapterTitle"
+          :paragraphs="shown"
+          :bubbles="comments.bubbles"
+          @open="openComments"
+        />
         <div class="reader__pager">
           <button type="button" :disabled="!prevChapter" @click="goChapter(prevChapter?.id)">上一章</button>
           <button type="button" :disabled="!nextChapter" @click="goChapter(nextChapter?.id)">下一章</button>
         </div>
       </div>
       <aside class="reader__rail">
-        <strong>评论</strong>
-        <p>读到后面，书友会写在这里。</p>
+        <CommentPanel
+          v-if="wide && panelOpen"
+          :threads="comments.threads"
+          :pending="panelPending"
+          :failed="panelFailed"
+          @retry="onRetry(comments.activeId)"
+          @close="closeComments"
+        />
+        <template v-else>
+          <strong>评论</strong>
+          <p>读到后面，书友会写在这里。</p>
+        </template>
       </aside>
     </div>
+
+    <VanPopup
+      v-if="!wide"
+      v-model:show="panelOpen"
+      position="bottom"
+      :lock-scroll="false"
+      class="reader__sheet"
+      @open="holdScroll"
+      @opened="holdScroll"
+      @close="holdScroll"
+      @closed="onSheetClosed"
+    >
+      <CommentPanel
+        :threads="comments.threads"
+        :pending="panelPending"
+        :failed="panelFailed"
+        @retry="onRetry(comments.activeId)"
+        @close="closeComments"
+      />
+    </VanPopup>
 
     <VanPopup v-model:show="tocOpen" position="left" :lock-scroll="false" class="reader__toc">
       <ul>
@@ -64,11 +104,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NavBar as VanNavBar, Popup as VanPopup } from 'vant'
 import { loadChapterImages } from '@/core/epub'
 import ChapterContent from '@/components/reader/ChapterContent.vue'
+import CommentPanel from '@/components/reader/CommentPanel.vue'
 import {
   getBook,
   getReadingState,
@@ -79,11 +120,15 @@ import {
 } from '@/db/repos/library'
 import type { BookRow, ChapterRow, ParagraphRow, ReadingStateRow } from '@/db/schema'
 import { platform } from '@/platform'
+import { useCommentsStore } from '@/stores/comments'
+import { useGenerationStore } from '@/stores/generation'
 import { useSettingsStore, type ReaderTheme } from '@/stores/settings'
 
 const route = useRoute()
 const router = useRouter()
 const settings = useSettingsStore()
+const generation = useGenerationStore()
+const comments = useCommentsStore()
 const scrollEl = ref<HTMLElement | null>(null)
 const book = ref<BookRow | null>(null)
 const chapters = ref<ChapterRow[]>([])
@@ -91,7 +136,15 @@ const shown = ref<ParagraphRow[]>([])
 const error = ref('')
 const tocOpen = ref(false)
 const displayOpen = ref(false)
+const panelOpen = ref(false)
+const wide = ref(false)
 const urls: string[] = []
+let scrollSnapshot = 0
+let media: MediaQueryList | null = null
+
+function applyWide() {
+  wide.value = media?.matches ?? false
+}
 
 let observer: IntersectionObserver | null = null
 let readFloor = 0
@@ -109,6 +162,15 @@ const chapterTitle = computed(
 const chapterIndex = computed(() => chapters.value.findIndex((chapter) => chapter.id === chapterId.value))
 const prevChapter = computed(() => chapters.value[chapterIndex.value - 1])
 const nextChapter = computed(() => chapters.value[chapterIndex.value + 1])
+const panelPending = computed(() => comments.bubbles[comments.activeId]?.pending ?? false)
+const panelFailed = computed(() => comments.bubbles[comments.activeId]?.failed ?? false)
+
+onMounted(() => {
+  generation.bind()
+  media = window.matchMedia('(min-width: 960px)')
+  applyWide()
+  media.addEventListener('change', applyWide)
+})
 
 watch(
   () => route.fullPath,
@@ -121,6 +183,8 @@ watch(
 onBeforeUnmount(() => {
   observer?.disconnect()
   revokeUrls()
+  generation.stop()
+  media?.removeEventListener('change', applyWide)
   void flush()
 })
 
@@ -180,6 +244,8 @@ async function showChapter(id: string, state: ReadingStateRow | undefined) {
   requestAnimationFrame(() => {
     ignore = false
   })
+  const order = state?.chapterId === id ? state.paragraphIndex : 1
+  await generation.sync({ bookId: bookId.value, chapterId: id, order })
 }
 
 function restore(state: ReadingStateRow | undefined, id: string) {
@@ -268,6 +334,11 @@ async function flush() {
   const payload = pending
   pending = null
   await recordProgress(bookId.value, payload)
+  await generation.sync({
+    bookId: bookId.value,
+    chapterId: payload.chapterId,
+    order: payload.paragraphIndex,
+  })
 }
 
 function goChapter(id: string | undefined) {
@@ -278,6 +349,49 @@ function goChapter(id: string | undefined) {
 
 function goLibrary() {
   void router.push({ name: 'library' })
+}
+
+function goSettings() {
+  void router.push({ name: 'settings' })
+}
+
+function holdScroll() {
+  const top = scrollSnapshot
+  const apply = () => {
+    const root = scrollEl.value
+    if (root) root.scrollTop = top
+  }
+  apply()
+  void nextTick(apply)
+  requestAnimationFrame(() => {
+    apply()
+    requestAnimationFrame(apply)
+  })
+}
+
+async function openComments(id: string) {
+  scrollSnapshot = scrollEl.value?.scrollTop ?? 0
+  await comments.open(id)
+  panelOpen.value = true
+  holdScroll()
+}
+
+function closeComments() {
+  scrollSnapshot = scrollEl.value?.scrollTop ?? 0
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+  panelOpen.value = false
+  if (wide.value) comments.close()
+  holdScroll()
+}
+
+function onSheetClosed() {
+  if (!panelOpen.value) comments.close()
+  holdScroll()
+}
+
+function onRetry(id: string) {
+  if (!id) return
+  void generation.retry(id)
 }
 
 function onFont(event: Event) {
@@ -378,6 +492,21 @@ function revokeUrls() {
   color: var(--rs-muted);
 }
 
+.reader__key {
+  margin: 0;
+  padding: 8px 16px;
+  background: var(--rs-surface);
+  color: var(--rs-muted);
+  font-size: 14px;
+
+  button {
+    margin-left: 8px;
+    border: 0;
+    background: transparent;
+    color: var(--rs-accent);
+  }
+}
+
 .reader__body {
   flex: 1;
   min-height: 0;
@@ -433,6 +562,15 @@ function revokeUrls() {
     border-left: 1px solid var(--rs-border);
     padding: 24px 16px;
     color: var(--rs-muted);
+    overflow: auto;
   }
+}
+</style>
+
+<style lang="less">
+.reader__sheet {
+  height: 62vh;
+  overflow: auto;
+  background: var(--rs-bg, #fff);
 }
 </style>

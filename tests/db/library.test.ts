@@ -62,6 +62,9 @@ describe('library import', () => {
         paragraphId: kept?.id ?? '',
         parentId: '',
         authorType: 'resident',
+        displayName: '考据癖',
+        role: '考据癖',
+        text: '留下',
       },
       {
         id: 'drop',
@@ -69,6 +72,9 @@ describe('library import', () => {
         paragraphId: dropped?.id ?? '',
         parentId: '',
         authorType: 'resident',
+        displayName: '考据癖',
+        role: '考据癖',
+        text: '丢掉',
       },
     ])
 

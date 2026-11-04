@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
-import type { SpoilerLevel, UnlockMode } from '@/core/types'
+import type { AuthorType, DebateEntry, NicknameEntry, Prediction, SpoilerLevel, UnlockMode } from '@/core/types'
 
 export type ReadStatus = 'unread' | 'reading' | 'done'
 export type GenStatus = 'none' | 'rough' | 'refining' | 'refined' | 'failed'
@@ -44,6 +44,8 @@ export interface ParagraphRow {
   textHash: string
   kind: ParagraphKind
   genStatus: GenStatus
+  /** 0 到 3。还没生成时缺省。 */
+  score?: number | null
 }
 
 export interface ReadingStateRow {
@@ -61,13 +63,48 @@ export interface BookFileRow {
   bytes: Uint8Array
 }
 
+export interface CommentBatchRow {
+  id: string
+  paragraphId: string
+  batchNo: number
+  createdAt: string
+}
+
 export interface CommentRow {
   id: string
   batchId: string
   paragraphId: string
+  /** 主楼为空字符串，回复指向主楼 id */
   parentId: string
-  authorType: string
+  authorType: AuthorType
+  displayName: string
+  role: string
+  text: string
+  /** 同一批里的写入顺序，用来稳定楼中楼的前两条 */
+  seq?: number
   mismatched?: boolean
+}
+
+export interface BookMemoryRow {
+  bookId: string
+  nicknames: NicknameEntry[]
+  predictions: Prediction[]
+  debates: DebateEntry[]
+  entities: string[]
+  updatedAt: string
+}
+
+export interface GenerationLogRow {
+  id: string
+  bookId: string
+  type: 'rough' | 'refine' | 'live'
+  createdAt: string
+  ok: boolean
+  promptTokens: number
+  completionTokens: number
+  cacheHitTokens: number
+  cost: number
+  error?: string
 }
 
 /** 只为按已有索引删除关联行，字段在后续里程碑补全。 */
@@ -83,14 +120,14 @@ export class ReaderSeatDB extends Dexie {
   chapters!: EntityTable<ChapterRow, 'id'>
   paragraphs!: EntityTable<ParagraphRow, 'id'>
   residentReaders!: EntityTable<ScopedRow, 'id'>
-  bookMemories!: EntityTable<{ bookId: string }, 'bookId'>
+  bookMemories!: EntityTable<BookMemoryRow, 'bookId'>
   predictions!: EntityTable<ScopedRow, 'id'>
-  commentBatches!: EntityTable<ScopedRow, 'id'>
+  commentBatches!: EntityTable<CommentBatchRow, 'id'>
   comments!: EntityTable<CommentRow, 'id'>
   userNotes!: EntityTable<ScopedRow, 'id'>
   chapterTalks!: EntityTable<ScopedRow, 'id'>
   readingStates!: EntityTable<ReadingStateRow, 'bookId'>
-  generationLogs!: EntityTable<ScopedRow, 'id'>
+  generationLogs!: EntityTable<GenerationLogRow, 'id'>
   settings!: EntityTable<SettingsRow, 'key'>
   bookFiles!: EntityTable<BookFileRow, 'bookId'>
 

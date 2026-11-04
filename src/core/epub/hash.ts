@@ -63,9 +63,10 @@ function sha256(data: Uint8Array): Uint8Array {
   for (let offset = 0; offset < padded.length; offset += 64) {
     for (let i = 0; i < 16; i++) words[i] = view.getUint32(offset + i * 4)
     for (let i = 16; i < 64; i++) {
-      const s0 = rotr(words[i - 15], 7) ^ rotr(words[i - 15], 18) ^ (words[i - 15] >>> 3)
-      const s1 = rotr(words[i - 2], 17) ^ rotr(words[i - 2], 19) ^ (words[i - 2] >>> 10)
-      words[i] = (words[i - 16] + s0 + words[i - 7] + s1) >>> 0
+      const earlier = (index: number) => words[index] ?? 0
+      const s0 = rotr(earlier(i - 15), 7) ^ rotr(earlier(i - 15), 18) ^ (earlier(i - 15) >>> 3)
+      const s1 = rotr(earlier(i - 2), 17) ^ rotr(earlier(i - 2), 19) ^ (earlier(i - 2) >>> 10)
+      words[i] = (earlier(i - 16) + s0 + earlier(i - 7) + s1) >>> 0
     }
     let a = h0
     let b = h1
@@ -78,7 +79,7 @@ function sha256(data: Uint8Array): Uint8Array {
     for (let i = 0; i < 64; i++) {
       const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
       const ch = (e & f) ^ (~e & g)
-      const temp1 = (h + s1 + ch + SHA256_K[i] + words[i]) >>> 0
+      const temp1 = (h + s1 + ch + (SHA256_K[i] ?? 0) + (words[i] ?? 0)) >>> 0
       const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
       const maj = (a & b) ^ (a & c) ^ (b & c)
       const temp2 = (s0 + maj) >>> 0

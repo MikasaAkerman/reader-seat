@@ -13,6 +13,7 @@ export interface RoughPromptContext {
   blockText: string
   knownEntities: string[]
   tasteExamples?: string
+  lineupText?: string
 }
 
 export function buildRoughPrompt(ctx: RoughPromptContext): ChatMessage[] {
@@ -39,7 +40,7 @@ export function buildRoughPrompt(ctx: RoughPromptContext): ChatMessage[] {
         ROUGH_JSON_EXAMPLE,
       ].join('\n'),
     },
-    { role: 'user', content: `书友设定（精简）\n${briefLineup()}` },
+    { role: 'user', content: `书友设定（精简）\n${ctx.lineupText || briefLineup()}` },
     { role: 'user', content: `书圈记忆\n${ctx.memorySnapshot || '（空）'}` },
     { role: 'user', content: `前文摘要\n${ctx.priorSummary || '（无）'}\n\n书籍信息\n${book}` },
     {

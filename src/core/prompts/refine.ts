@@ -13,6 +13,7 @@ export interface RefinePromptContext {
   pid: string
   hotReason: string
   residentState: string
+  lineupText?: string
 }
 
 export function buildRefinePrompt(ctx: RefinePromptContext): ChatMessage[] {
@@ -31,7 +32,7 @@ export function buildRefinePrompt(ctx: RefinePromptContext): ChatMessage[] {
         REFINE_JSON_EXAMPLE,
       ].join('\n'),
     },
-    { role: 'user', content: `书友设定（完整）\n${fullLineup()}\n\n动态状态\n${ctx.residentState || '（无）'}` },
+    { role: 'user', content: `书友设定（完整）\n${ctx.lineupText || fullLineup()}\n\n动态状态\n${ctx.residentState || '（无）'}` },
     { role: 'user', content: `书圈记忆\n${ctx.memorySnapshot || '（空）'}` },
     {
       role: 'user',

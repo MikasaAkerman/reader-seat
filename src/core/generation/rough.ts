@@ -1,4 +1,4 @@
-import type { LlmClient } from '../llm'
+import type { LlmClient, LlmUsage } from '../llm'
 import { buildRoughPrompt, type RoughPromptContext } from '../prompts'
 import type { TextBlock } from '../types'
 import { filterByEntityRule } from './entities'
@@ -9,11 +9,13 @@ export async function runRough(
   block: TextBlock,
   client: LlmClient,
   knownEntities: Set<string>,
-): Promise<RoughResult> {
-  const { data } = await client.chatJson(buildRoughPrompt(ctx), roughResultSchema, {
+  signal?: AbortSignal,
+): Promise<RoughResult & { usage: LlmUsage }> {
+  const { data, usage } = await client.chatJson(buildRoughPrompt(ctx), roughResultSchema, {
     temperature: 1,
     maxTokens: 2000,
     timeoutMs: 60_000,
+    signal,
   })
 
   const paragraphs = data.paragraphs.map((paragraph) => {
@@ -32,5 +34,5 @@ export async function runRough(
     }
   })
 
-  return { paragraphs, new_entities: data.new_entities }
+  return { paragraphs, new_entities: data.new_entities, usage }
 }
