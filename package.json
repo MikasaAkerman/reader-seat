@@ -11,8 +11,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri",
-    "phase0": "tsx scripts/phase0-generate.ts"
+    "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -51,7 +50,6 @@
     "jsdom": "^27.1.0",
     "less": "^4.4.2",
     "prettier": "^3.6.2",
-    "tsx": "^4.20.6",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.2",
     "unplugin-vue-components": "^30.0.0",

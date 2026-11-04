@@ -29,13 +29,24 @@
         />
         <button
           v-else-if="bubbles[paragraph.id]?.failed"
-          class="chapter__retry"
+          class="chapter__action chapter__action--failed"
           type="button"
+          aria-label="这段没生成出来，点开重试"
+          title="生成失败"
           @click="emit('open', paragraph.id)"
         >
-          生成失败
+          <VanIcon name="replay" />
         </button>
-        <button v-else class="chapter__write" type="button" @click="emit('open', paragraph.id)">段评</button>
+        <button
+          v-else
+          class="chapter__action"
+          type="button"
+          aria-label="写段评"
+          title="写段评"
+          @click="emit('open', paragraph.id)"
+        >
+          <VanIcon name="chat-o" />
+        </button>
       </template>
     </div>
   </article>
@@ -43,6 +54,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { Icon as VanIcon } from 'vant'
 import type { BubbleState } from '@/db/repos/comments'
 import type { ParagraphKind } from '@/db/schema'
 import ParagraphBubble from './ParagraphBubble.vue'
@@ -118,16 +130,28 @@ const emit = defineEmits<{
 </script>
 
 <style scoped lang="less">
+.chapter {
+  font-family: var(--rs-font-reading);
+}
+
 .chapter__title {
-  margin: 0 0 24px;
-  font-size: 1.4em;
+  margin: var(--rs-space-3) 0 var(--rs-space-6);
+  font-size: calc(var(--rs-font-size, 18px) * 1.45);
+  font-weight: 600;
   line-height: 1.4;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.chapter__block {
+  position: relative;
 }
 
 .chapter__p {
   margin: 0 0 1em;
   font-size: var(--rs-font-size, 18px);
   line-height: var(--rs-line-height, 1.85);
+  text-align: justify;
   content-visibility: auto;
   contain-intrinsic-size: auto 4.5em;
 
@@ -135,21 +159,47 @@ const emit = defineEmits<{
     display: block;
     max-width: 100%;
     height: auto;
-    margin: 0.4em 0;
+    margin: 0.4em auto;
+  }
+
+  :deep(a) {
+    color: var(--rs-accent);
+    text-decoration: none;
   }
 }
 
 .chapter__p--heading {
-  font-size: calc(var(--rs-font-size, 18px) * 1.25);
-  font-weight: 700;
+  margin: 1.2em 0 0.8em;
+  font-size: calc(var(--rs-font-size, 18px) * 1.2);
+  font-weight: 600;
+  line-height: 1.5;
 }
 
-.chapter__retry,
-.chapter__write {
-  margin: -0.4em 0 1em;
+.chapter__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 24px;
+  margin: -0.5em 0 0.8em -6px;
+  padding: 0;
   border: 0;
+  border-radius: 999px;
   background: transparent;
   color: var(--rs-muted, #78716c);
-  padding: 0;
+  font-size: 15px;
+  opacity: 0.4;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+
+  &:hover,
+  &:focus-visible {
+    opacity: 1;
+  }
+}
+
+.chapter__action--failed {
+  color: var(--rs-danger);
+  opacity: 0.85;
 }
 </style>

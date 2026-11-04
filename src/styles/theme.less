@@ -1,30 +1,114 @@
 :root {
   --rs-bg: #f7f4ef;
   --rs-surface: #fffdf9;
+  --rs-surface-2: #f1ece4;
   --rs-text: #1c1917;
   --rs-muted: #78716c;
   --rs-accent: #0f766e;
-  --rs-border: #e7e5e4;
+  --rs-accent-soft: rgba(15, 118, 110, 0.1);
+  --rs-on-accent: #ffffff;
+  --rs-danger: #b42318;
+  --rs-border: #e7e1d8;
   --rs-font-size: 18px;
   --rs-line-height: 1.85;
+
+  --rs-space-1: 4px;
+  --rs-space-2: 8px;
+  --rs-space-3: 12px;
+  --rs-space-4: 16px;
+  --rs-space-5: 24px;
+  --rs-space-6: 32px;
+
+  --rs-radius-sm: 6px;
+  --rs-radius-md: 10px;
+  --rs-radius-lg: 16px;
+  --rs-shadow-card: 0 1px 2px rgba(41, 37, 36, 0.06), 0 4px 16px rgba(41, 37, 36, 0.05);
+
+  --rs-text-xs: 12px;
+  --rs-text-sm: 13px;
+  --rs-text-md: 15px;
+  --rs-text-lg: 17px;
+  --rs-text-xl: 22px;
+
+  --rs-font-ui: 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --rs-font-reading: 'Songti SC', 'Noto Serif SC', 'Source Han Serif SC', serif;
 }
 
 :root[data-reader-theme='eye'] {
   --rs-bg: #e7f0dc;
   --rs-surface: #f4f8ef;
+  --rs-surface-2: #dde8d0;
   --rs-text: #1c2416;
   --rs-muted: #5c6b52;
   --rs-accent: #3f6212;
+  --rs-accent-soft: rgba(63, 98, 18, 0.12);
+  --rs-on-accent: #ffffff;
+  --rs-danger: #a8321f;
   --rs-border: #d5e0c8;
+  --rs-shadow-card: 0 1px 2px rgba(28, 36, 22, 0.06), 0 4px 16px rgba(28, 36, 22, 0.05);
 }
 
 :root[data-reader-theme='night'] {
   --rs-bg: #1c1917;
-  --rs-surface: #292524;
-  --rs-text: #f5f5f4;
-  --rs-muted: #a8a29e;
+  --rs-surface: #262220;
+  --rs-surface-2: #312c29;
+  --rs-text: #ece7e2;
+  --rs-muted: #a29a93;
   --rs-accent: #5eead4;
-  --rs-border: #44403c;
+  --rs-accent-soft: rgba(94, 234, 212, 0.14);
+  --rs-on-accent: #10201d;
+  --rs-danger: #f87171;
+  --rs-border: #3d3734;
+  --rs-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+html:root {
+  --van-primary-color: var(--rs-accent);
+  --van-danger-color: var(--rs-danger);
+  --van-text-color: var(--rs-text);
+  --van-text-color-2: var(--rs-muted);
+  --van-text-color-3: var(--rs-muted);
+  --van-active-color: var(--rs-surface-2);
+  --van-background: var(--rs-bg);
+  --van-background-2: var(--rs-surface);
+  --van-background-3: var(--rs-surface);
+  --van-border-color: var(--rs-border);
+  --van-base-font: var(--rs-font-ui);
+  --van-radius-md: var(--rs-radius-sm);
+  --van-radius-lg: var(--rs-radius-md);
+
+  --van-nav-bar-background: var(--rs-bg);
+  --van-nav-bar-title-text-color: var(--rs-text);
+  --van-nav-bar-title-font-size: var(--rs-text-lg);
+  --van-nav-bar-icon-color: var(--rs-text);
+  --van-nav-bar-text-color: var(--rs-accent);
+  --van-cell-group-inset-radius: var(--rs-radius-md);
+  --van-cell-group-title-color: var(--rs-muted);
+  --van-cell-background: var(--rs-surface);
+  --van-cell-active-color: var(--rs-surface-2);
+  --van-popup-background: var(--rs-surface);
+  --van-popup-round-radius: var(--rs-radius-lg);
+  --van-action-sheet-item-background: var(--rs-surface);
+  --van-action-sheet-cancel-padding-color: var(--rs-bg);
+  --van-dialog-background: var(--rs-surface);
+  --van-picker-background: var(--rs-surface);
+  --van-picker-mask-color: linear-gradient(180deg, transparent, transparent),
+    linear-gradient(0deg, transparent, transparent);
+  --van-field-input-text-color: var(--rs-text);
+  --van-field-placeholder-text-color: var(--rs-muted);
+  --van-switch-background: var(--rs-border);
+  --van-switch-on-background: var(--rs-accent);
+  --van-slider-inactive-background: var(--rs-border);
+  --van-slider-active-background: var(--rs-accent);
+  --van-empty-description-color: var(--rs-muted);
+  --van-collapse-item-content-background: var(--rs-surface);
+  --van-tag-primary-color: var(--rs-accent);
+  --van-button-primary-color: var(--rs-on-accent);
+  --van-button-primary-background: var(--rs-accent);
+  --van-button-primary-border-color: var(--rs-accent);
+  --van-button-default-background: var(--rs-surface);
+  --van-button-default-color: var(--rs-text);
+  --van-button-default-border-color: var(--rs-border);
 }
 
 body {
@@ -33,10 +117,27 @@ body {
 
 .van-nav-bar {
   padding-top: env(safe-area-inset-top, 0px);
+  font-weight: 600;
+
+  .van-nav-bar__title {
+    font-weight: 600;
+  }
+
+  &.van-hairline--bottom::after {
+    border-color: var(--rs-border);
+  }
 }
 
 .van-popup--left,
 .van-popup--right,
 .van-popup--top {
   padding-top: env(safe-area-inset-top, 0px);
+}
+
+.van-popup--bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.van-cell-group__title {
+  font-size: var(--rs-text-sm);
 }

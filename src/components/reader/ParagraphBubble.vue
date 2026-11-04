@@ -1,16 +1,20 @@
 <template>
   <button
     class="bubble"
-    :class="{ 'bubble--hot': hot, 'bubble--pending': pending, 'bubble--locked': locked }"
+    :class="{ 'bubble--hot': hot && !pending, 'bubble--pending': pending, 'bubble--locked': locked }"
     type="button"
     :aria-label="pending ? '书友正在写' : locked ? `段评 ${count}，先写后看` : `段评 ${count}`"
     @click="emit('open')"
   >
-    {{ pending ? '…' : locked ? `${count} 锁` : count }}
+    <VanLoading v-if="pending" size="12px" color="currentColor" />
+    <VanIcon v-else :name="locked ? 'lock' : 'chat-o'" />
+    <span v-if="!pending">{{ count }}</span>
   </button>
 </template>
 
 <script setup lang="ts">
+import { Icon as VanIcon, Loading as VanLoading } from 'vant'
+
 defineProps<{
   count: number
   hot: boolean
@@ -25,23 +29,44 @@ const emit = defineEmits<{
 
 <style scoped lang="less">
 .bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
   margin: -0.4em 0 1em;
+  padding: 0 8px;
   border: 0;
   border-radius: 999px;
-  padding: 2px 10px;
-  background: var(--rs-surface, #fff);
+  background: var(--rs-accent-soft);
   color: var(--rs-accent, #0f766e);
-  font-size: 13px;
-  box-shadow: inset 0 0 0 1px var(--rs-border, #e7e5e4);
+  font-family: var(--rs-font-ui);
+  font-size: var(--rs-text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+
+  .van-icon {
+    font-size: 13px;
+  }
 }
 
 .bubble--hot {
   background: var(--rs-accent, #0f766e);
-  color: white;
-  font-weight: 700;
+  color: var(--rs-on-accent);
+  font-weight: 600;
 }
 
 .bubble--pending {
+  min-width: 34px;
+  justify-content: center;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--rs-border);
+  color: var(--rs-muted, #78716c);
+}
+
+.bubble--locked {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--rs-border);
   color: var(--rs-muted, #78716c);
 }
 </style>

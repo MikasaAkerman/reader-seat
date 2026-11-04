@@ -2,53 +2,19 @@
   <div class="reader">
     <VanNavBar :title="book?.title || '阅读'" left-arrow @click-left="goLibrary">
       <template #right>
-        <button class="reader__tool" type="button" @click="tocOpen = true">目录</button>
-        <button class="reader__tool" type="button" @click="goArchive">档案</button>
-        <button class="reader__tool" type="button" @click="displayOpen = !displayOpen">Aa</button>
+        <IconButton icon="bars" label="目录" @click="tocOpen = true" />
+        <IconButton icon="records-o" label="书圈档案" @click="goArchive" />
+        <IconButton icon="font-o" label="显示设置" :active="displayOpen" @click="displayOpen = true" />
       </template>
     </VanNavBar>
 
-    <div v-if="displayOpen" class="reader__display">
-      <label>
-        字号 {{ settings.display.fontSize }}
-        <input
-          type="range"
-          min="16"
-          max="24"
-          step="1"
-          :value="settings.display.fontSize"
-          @input="onFont"
-        />
-      </label>
-      <label>
-        行距 {{ settings.display.lineHeight }}
-        <input
-          type="range"
-          min="1.6"
-          max="2.2"
-          step="0.1"
-          :value="settings.display.lineHeight"
-          @input="onLine"
-        />
-      </label>
-      <div class="reader__themes">
-        <button type="button" @click="onTheme('day')">日间</button>
-        <button type="button" @click="onTheme('eye')">护眼</button>
-        <button type="button" @click="onTheme('night')">夜间</button>
-      </div>
-      <label class="reader__toggle">
-        <input type="checkbox" :checked="settings.display.danmaku" @change="onDanmaku" />
-        热段弹幕
-      </label>
-      <button type="button" @click="notesOpen = true">批注 {{ chapterNotes.length }}</button>
-    </div>
+    <button v-if="generation.needsKey" class="reader__key" type="button" @click="goSettings">
+      <VanIcon name="info-o" />
+      <span>没有 API Key，书友暂不发言</span>
+      <span class="reader__key-link">去设置<VanIcon name="arrow" /></span>
+    </button>
 
-    <p v-if="generation.needsKey" class="reader__key">
-      还没有 API Key，书友先不说话。
-      <button type="button" @click="goSettings">去设置</button>
-    </p>
-
-    <p v-if="error" class="reader__hint">{{ error }}</p>
+    <VanEmpty v-if="error" :description="error" />
 
     <div v-else class="reader__body">
       <div ref="scrollEl" class="reader__scroll" @scroll="onScroll">
@@ -72,10 +38,32 @@
           @jump="jumpTo"
           @submit="onMicro"
         />
-        <div class="reader__pager">
-          <button type="button" :disabled="!prevChapter" @click="goChapter(prevChapter?.id)">上一章</button>
-          <button type="button" :disabled="!nextChapter" @click="goChapter(nextChapter?.id)">下一章</button>
-        </div>
+        <nav class="reader__pager" aria-label="翻章">
+          <button
+            class="reader__page reader__page--prev"
+            type="button"
+            :disabled="!prevChapter"
+            @click="goChapter(prevChapter?.id)"
+          >
+            <VanIcon name="arrow-left" />
+            <span>
+              <small>上一章</small>
+              <strong>{{ prevChapter?.title ?? '已是第一章' }}</strong>
+            </span>
+          </button>
+          <button
+            class="reader__page reader__page--next"
+            type="button"
+            :disabled="!nextChapter"
+            @click="goChapter(nextChapter?.id)"
+          >
+            <span>
+              <small>下一章</small>
+              <strong>{{ nextChapter?.title ?? '已是最后一章' }}</strong>
+            </span>
+            <VanIcon name="arrow" />
+          </button>
+        </nav>
       </div>
       <aside class="reader__rail">
         <CommentPanel
@@ -102,10 +90,10 @@
           @batch="onBatch"
           @close="closeComments"
         />
-        <template v-else>
-          <strong>评论</strong>
-          <p>读到后面，书友会写在这里。</p>
-        </template>
+        <div v-else class="reader__rail-empty">
+          <VanIcon name="chat-o" />
+          <span>点段末气泡看段评</span>
+        </div>
       </aside>
     </div>
 
@@ -113,6 +101,7 @@
       v-if="!wide"
       v-model:show="panelOpen"
       position="bottom"
+      round
       :lock-scroll="false"
       class="reader__sheet"
       @open="holdScroll"
@@ -146,38 +135,135 @@
     </VanPopup>
 
     <button v-if="danmaku" class="reader__danmaku" type="button" @click="openDanmaku">
-      {{ danmaku.text }}
+      <VanIcon name="fire-o" />
+      <span>{{ danmaku.text }}</span>
     </button>
 
-    <VanPopup v-model:show="notesOpen" position="bottom" :lock-scroll="false" class="reader__sheet">
+    <VanPopup v-model:show="displayOpen" position="bottom" round :lock-scroll="false" class="reader__display">
+      <div class="reader__display-row">
+        <span class="reader__display-label">字号</span>
+        <VanSlider
+          :model-value="settings.display.fontSize"
+          :min="16"
+          :max="24"
+          :step="1"
+          bar-height="3px"
+          button-size="20px"
+          @update:model-value="onFont"
+        />
+        <span class="reader__display-value">{{ settings.display.fontSize }}</span>
+      </div>
+      <div class="reader__display-row">
+        <span class="reader__display-label">行距</span>
+        <VanSlider
+          :model-value="settings.display.lineHeight"
+          :min="1.6"
+          :max="2.2"
+          :step="0.1"
+          bar-height="3px"
+          button-size="20px"
+          @update:model-value="onLine"
+        />
+        <span class="reader__display-value">{{ settings.display.lineHeight.toFixed(1) }}</span>
+      </div>
+      <div class="reader__display-row">
+        <span class="reader__display-label">主题</span>
+        <div class="reader__swatches" role="radiogroup" aria-label="阅读主题">
+          <button
+            v-for="item in themes"
+            :key="item.id"
+            class="reader__swatch"
+            :class="[`reader__swatch--${item.id}`, { 'reader__swatch--on': settings.display.theme === item.id }]"
+            type="button"
+            role="radio"
+            :aria-checked="settings.display.theme === item.id"
+            @click="onTheme(item.id)"
+          >
+            <span>{{ item.name }}</span>
+          </button>
+        </div>
+      </div>
+      <div class="reader__display-row">
+        <span class="reader__display-label">弹幕</span>
+        <span class="reader__display-hint">热段滑过时飘一句</span>
+        <VanSwitch
+          size="20px"
+          :model-value="settings.display.danmaku"
+          aria-label="热段弹幕"
+          @update:model-value="onDanmaku"
+        />
+      </div>
+      <button class="reader__display-notes" type="button" @click="openNotes">
+        <VanIcon name="edit" />
+        <span>本章批注</span>
+        <span class="reader__display-count">{{ chapterNotes.length }}</span>
+        <VanIcon name="arrow" />
+      </button>
+    </VanPopup>
+
+    <VanPopup v-model:show="notesOpen" position="bottom" round :lock-scroll="false" class="reader__sheet">
       <section class="reader__notes">
-        <h2>这一章的批注</h2>
-        <p v-if="chapterNotes.length === 0">还没有划线。</p>
-        <p v-for="note in chapterNotes" :key="note.id">「{{ note.quote }}」 {{ note.text }}</p>
+        <header class="reader__sheet-head">
+          <h2>本章批注</h2>
+          <IconButton icon="cross" label="关闭" variant="muted" @click="notesOpen = false" />
+        </header>
+        <VanEmpty v-if="chapterNotes.length === 0" image-size="64" description="长按选中文字即可划线批注" />
+        <ul v-else class="reader__note-list">
+          <li v-for="note in chapterNotes" :key="note.id">
+            <blockquote>{{ note.quote }}</blockquote>
+            <p>{{ note.text }}</p>
+          </li>
+        </ul>
       </section>
     </VanPopup>
 
-    <VanPopup v-model:show="highlightOpen" position="bottom" :lock-scroll="false" class="reader__sheet">
+    <VanPopup v-model:show="highlightOpen" position="bottom" round :lock-scroll="false">
       <form class="reader__notes" @submit.prevent="saveHighlightNote">
-        <h2>划线批注</h2>
-        <p v-if="highlightDraft">「{{ highlightDraft.quote }}」</p>
-        <textarea v-model="noteText" rows="3" placeholder="写一句批注" />
-        <button type="submit" :disabled="!noteText.trim()">保存</button>
+        <header class="reader__sheet-head">
+          <h2>划线批注</h2>
+          <IconButton icon="cross" label="关闭" variant="muted" @click="highlightDraft = null" />
+        </header>
+        <blockquote v-if="highlightDraft">{{ highlightDraft.quote }}</blockquote>
+        <VanField
+          v-model="noteText"
+          class="reader__field"
+          type="textarea"
+          rows="3"
+          autosize
+          placeholder="写一句批注"
+          aria-label="批注内容"
+        />
+        <VanButton block round type="primary" native-type="submit" :disabled="!noteText.trim()">保存</VanButton>
       </form>
     </VanPopup>
 
-    <VanPopup v-model:show="footnoteOpen" position="bottom" :lock-scroll="false" class="reader__sheet">
+    <VanPopup v-model:show="footnoteOpen" position="bottom" round :lock-scroll="false">
       <section v-if="footnote" class="reader__notes">
-        <h2>注释</h2>
-        <p>{{ footnote.text }}</p>
-        <button v-if="footnote.here" type="button" @click="jumpToFootnote">跳到这一段</button>
+        <header class="reader__sheet-head">
+          <h2>注释</h2>
+          <IconButton icon="cross" label="关闭" variant="muted" @click="footnote = null" />
+        </header>
+        <p class="reader__footnote">{{ footnote.text }}</p>
+        <VanButton v-if="footnote.here" block round plain type="primary" @click="jumpToFootnote">跳到这一段</VanButton>
       </section>
     </VanPopup>
 
-    <VanPopup v-model:show="tocOpen" position="left" :lock-scroll="false" class="reader__toc">
+    <VanPopup v-model:show="tocOpen" position="left" :lock-scroll="false" :z-index="3100" class="reader__toc">
+      <header class="reader__toc-head">
+        <strong>{{ book?.title }}</strong>
+        <small>{{ chapters.length }} 章</small>
+      </header>
       <ul>
         <li v-for="chapter in chapters" :key="chapter.id">
-          <button type="button" @click="goChapter(chapter.id)">{{ chapter.title }}</button>
+          <button
+            type="button"
+            :class="{ 'reader__toc-item--current': chapter.id === chapterId }"
+            :aria-current="chapter.id === chapterId ? 'page' : undefined"
+            @click="goChapter(chapter.id)"
+          >
+            <span>{{ chapter.title }}</span>
+            <VanIcon v-if="chapter.readStatus === 'done'" name="success" class="reader__toc-done" aria-label="已读完" />
+          </button>
         </li>
       </ul>
     </VanPopup>
@@ -187,10 +273,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NavBar as VanNavBar, Popup as VanPopup, showToast } from 'vant'
+import {
+  Button as VanButton,
+  Empty as VanEmpty,
+  Field as VanField,
+  Icon as VanIcon,
+  NavBar as VanNavBar,
+  Popup as VanPopup,
+  Slider as VanSlider,
+  Switch as VanSwitch,
+  showToast,
+} from 'vant'
 import { findLinkTarget, imageSrcs, loadChapterImages, resolveBookLink, rewriteImages } from '@/core/epub'
 import { paragraphOpening } from '@/core/export/markdown'
 import { lineupFor } from '@/core/generation/pipeline'
+import IconButton from '@/components/common/IconButton.vue'
 import ChapterContent from '@/components/reader/ChapterContent.vue'
 import ChapterTalk from '@/components/reader/ChapterTalk.vue'
 import CommentPanel from '@/components/reader/CommentPanel.vue'
@@ -244,6 +341,11 @@ const highlightOpen = computed({
     if (!open) highlightDraft.value = null
   },
 })
+const themes: { id: ReaderTheme; name: string }[] = [
+  { id: 'day', name: '日间' },
+  { id: 'eye', name: '护眼' },
+  { id: 'night', name: '夜间' },
+]
 const urls: string[] = []
 let scrollSnapshot = 0
 let media: MediaQueryList | null = null
@@ -701,13 +803,13 @@ function jumpTo(id: string) {
   scrollEl.value?.querySelector(`[data-paragraph-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' })
 }
 
-function onFont(event: Event) {
-  const fontSize = Number((event.target as HTMLInputElement).value)
+function onFont(value: number | [number, number]) {
+  const fontSize = Array.isArray(value) ? value[0] : value
   void settings.saveDisplay({ ...settings.display, fontSize })
 }
 
-function onLine(event: Event) {
-  const lineHeight = Number((event.target as HTMLInputElement).value)
+function onLine(value: number | [number, number]) {
+  const lineHeight = Math.round((Array.isArray(value) ? value[0] : value) * 10) / 10
   void settings.saveDisplay({ ...settings.display, lineHeight })
 }
 
@@ -715,9 +817,13 @@ function onTheme(theme: ReaderTheme) {
   void settings.saveDisplay({ ...settings.display, theme })
 }
 
-function onDanmaku(event: Event) {
-  const danmakuOn = (event.target as HTMLInputElement).checked
+function onDanmaku(danmakuOn: boolean) {
   void settings.saveDisplay({ ...settings.display, danmaku: danmakuOn })
+}
+
+function openNotes() {
+  displayOpen.value = false
+  notesOpen.value = true
 }
 
 async function onLink(href: string) {
@@ -766,72 +872,41 @@ function revokeUrls() {
 .reader :deep(.van-nav-bar) {
   position: relative;
   z-index: 3000;
-}
 
-.reader__tool {
-  border: 0;
-  background: transparent;
-  color: var(--rs-accent);
-  font-size: 14px;
-  margin-left: 12px;
-}
-
-.reader__display {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 20px;
-  padding: 8px 16px 12px;
-  border-bottom: 1px solid var(--rs-border);
-  background: var(--rs-surface);
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 13px;
-    color: var(--rs-muted);
+  .van-nav-bar__title {
+    max-width: 50%;
   }
-}
 
-.reader__toggle {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-}
-
-.reader__themes {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-
-  button {
-    border: 1px solid var(--rs-border);
-    background: var(--rs-bg);
-    color: inherit;
-    border-radius: 999px;
-    padding: 4px 10px;
+  .van-nav-bar__right {
+    padding-right: var(--rs-space-1);
   }
-}
-
-.reader__hint {
-  padding: 24px;
-  color: var(--rs-muted);
 }
 
 .reader__key {
-  margin: 0;
-  padding: 8px 16px;
-  background: var(--rs-surface);
-  color: var(--rs-muted);
-  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: var(--rs-space-2);
+  width: 100%;
+  padding: var(--rs-space-2) var(--rs-space-4);
+  border: 0;
+  border-bottom: 1px solid var(--rs-border);
+  background: var(--rs-accent-soft);
+  color: var(--rs-text);
+  font: inherit;
+  font-size: var(--rs-text-sm);
+  text-align: left;
+  cursor: pointer;
 
-  button {
-    margin-left: 8px;
-    border: 0;
-    background: transparent;
+  > .van-icon {
     color: var(--rs-accent);
   }
+}
+
+.reader__key-link {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--rs-accent);
 }
 
 .reader__body {
@@ -845,56 +920,352 @@ function revokeUrls() {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 24px 22px 48px;
+  padding: var(--rs-space-5) 22px 48px;
 }
 
 .reader__pager {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--rs-space-3);
+  margin-top: var(--rs-space-6);
+}
+
+.reader__page {
   display: flex;
-  justify-content: space-between;
-  margin-top: 28px;
+  align-items: center;
+  gap: var(--rs-space-2);
+  min-width: 0;
+  padding: var(--rs-space-3);
+  border: 1px solid var(--rs-border);
+  border-radius: var(--rs-radius-md);
+  background: var(--rs-surface);
+  color: var(--rs-text);
+  font: inherit;
+  cursor: pointer;
 
-  button {
-    border: 1px solid var(--rs-border);
-    background: var(--rs-surface);
-    color: inherit;
-    border-radius: 999px;
-    padding: 8px 14px;
+  > span {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
   }
 
-  button:disabled {
-    opacity: 0.4;
+  small {
+    color: var(--rs-muted);
+    font-size: var(--rs-text-xs);
   }
+
+  strong {
+    overflow: hidden;
+    font-size: var(--rs-text-sm);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .van-icon {
+    flex: none;
+    color: var(--rs-muted);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+.reader__page--prev {
+  text-align: left;
+}
+
+.reader__page--next {
+  text-align: right;
 }
 
 .reader__danmaku {
+  display: flex;
   flex: none;
-  margin: 0 16px 12px;
-  border: 0;
+  align-items: center;
+  gap: var(--rs-space-2);
+  margin: 0 var(--rs-space-4) var(--rs-space-3);
+  padding: var(--rs-space-2) var(--rs-space-4);
+  border: 1px solid var(--rs-border);
   border-radius: 999px;
-  padding: 8px 14px;
   background: var(--rs-surface);
   color: var(--rs-text);
+  font: inherit;
+  font-size: var(--rs-text-sm);
   text-align: left;
-  opacity: 0.92;
+  box-shadow: var(--rs-shadow-card);
+  opacity: 0.95;
+
+  .van-icon {
+    flex: none;
+    color: var(--rs-accent);
+  }
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.reader__display {
+  padding: var(--rs-space-4) var(--rs-space-5) var(--rs-space-5);
+}
+
+.reader__display-row {
+  display: flex;
+  align-items: center;
+  gap: var(--rs-space-4);
+  min-height: 48px;
+
+  .van-slider {
+    flex: 1;
+  }
+}
+
+.reader__display-label {
+  flex: none;
+  width: 2.5em;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
+}
+
+.reader__display-value {
+  width: 2em;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.reader__display-hint {
+  flex: 1;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-xs);
+}
+
+.reader__swatches {
+  display: flex;
+  flex: 1;
+  gap: var(--rs-space-3);
+}
+
+.reader__swatch {
+  flex: 1;
+  height: 40px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--rs-radius-sm);
+  font: inherit;
+  font-size: var(--rs-text-sm);
+  cursor: pointer;
+}
+
+.reader__swatch--day {
+  background: #f7f4ef;
+  color: #1c1917;
+}
+
+.reader__swatch--eye {
+  background: #e7f0dc;
+  color: #1c2416;
+}
+
+.reader__swatch--night {
+  background: #1c1917;
+  color: #ece7e2;
+}
+
+.reader__swatch--on {
+  outline: 2px solid var(--rs-accent);
+  outline-offset: 2px;
+}
+
+.reader__display-notes {
+  display: flex;
+  align-items: center;
+  gap: var(--rs-space-2);
+  width: 100%;
+  margin-top: var(--rs-space-3);
+  padding: var(--rs-space-3) var(--rs-space-4);
+  border: 0;
+  border-radius: var(--rs-radius-md);
+  background: var(--rs-bg);
+  color: var(--rs-text);
+  font: inherit;
+  font-size: var(--rs-text-md);
+  cursor: pointer;
+
+  > span:first-of-type {
+    flex: 1;
+    text-align: left;
+  }
+
+  .van-icon {
+    color: var(--rs-muted);
+  }
+}
+
+.reader__display-count {
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
 }
 
 .reader__notes {
-  padding: 16px;
+  padding: var(--rs-space-2) var(--rs-space-4) var(--rs-space-5);
 
-  textarea {
-    display: block;
-    width: 100%;
-    margin: 8px 0;
+  blockquote {
+    margin: 0 0 var(--rs-space-3);
+    padding-left: var(--rs-space-3);
+    border-left: 3px solid var(--rs-accent);
+    color: var(--rs-muted);
+    font-family: var(--rs-font-reading);
+    font-size: var(--rs-text-md);
+    line-height: 1.7;
   }
+}
+
+.reader__sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--rs-space-2);
+
+  h2 {
+    margin: 0;
+    font-size: var(--rs-text-md);
+    font-weight: 600;
+  }
+}
+
+.reader__note-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    padding: var(--rs-space-3) 0;
+    border-bottom: 1px solid var(--rs-border);
+  }
+
+  blockquote {
+    margin-bottom: var(--rs-space-2);
+  }
+
+  p {
+    margin: 0;
+    font-size: var(--rs-text-md);
+    line-height: 1.6;
+  }
+}
+
+.reader__field {
+  margin-bottom: var(--rs-space-4);
+  padding: var(--rs-space-2) var(--rs-space-3);
+  border: 1px solid var(--rs-border);
+  border-radius: var(--rs-radius-md);
+  background: var(--rs-bg);
+}
+
+.reader__footnote {
+  margin: 0 0 var(--rs-space-4);
+  font-family: var(--rs-font-reading);
+  font-size: var(--rs-text-md);
+  line-height: 1.75;
+}
+
+.reader__toc {
+  display: flex;
+  flex-direction: column;
+  width: min(82vw, 340px);
+  height: 100%;
+  background: var(--rs-surface);
+
+  ul {
+    flex: 1;
+    margin: 0;
+    padding: var(--rs-space-2) 0 var(--rs-space-5);
+    overflow: auto;
+    list-style: none;
+  }
+
+  li button {
+    display: flex;
+    align-items: center;
+    gap: var(--rs-space-2);
+    width: 100%;
+    min-height: 44px;
+    padding: var(--rs-space-2) var(--rs-space-5);
+    border: 0;
+    background: transparent;
+    color: var(--rs-text);
+    font: inherit;
+    font-size: var(--rs-text-md);
+    text-align: left;
+    cursor: pointer;
+
+    span {
+      flex: 1;
+      min-width: 0;
+    }
+  }
+}
+
+.reader__toc-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--rs-space-5) var(--rs-space-5) var(--rs-space-3);
+  border-bottom: 1px solid var(--rs-border);
+
+  strong {
+    font-size: var(--rs-text-lg);
+  }
+
+  small {
+    color: var(--rs-muted);
+    font-size: var(--rs-text-xs);
+  }
+}
+
+.reader__toc .reader__toc-item--current {
+  background: var(--rs-accent-soft);
+  box-shadow: inset 3px 0 0 var(--rs-accent);
+  color: var(--rs-accent);
+  font-weight: 600;
+}
+
+.reader__toc-done {
+  flex: none;
+  color: var(--rs-muted);
+  font-size: 14px;
 }
 
 .reader__rail {
   display: none;
 }
 
+.reader__rail-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--rs-space-2);
+  margin-top: 30vh;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
+
+  .van-icon {
+    font-size: 28px;
+    opacity: 0.6;
+  }
+}
+
 @media (min-width: 960px) {
   .reader__body {
-    width: min(100%, calc(42rem + 320px));
+    width: min(100%, calc(42rem + 360px));
     margin: 0 auto;
   }
 
@@ -906,11 +1277,9 @@ function revokeUrls() {
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
-    width: 320px;
+    width: 360px;
     flex: none;
     border-left: 1px solid var(--rs-border);
-    padding: 24px 16px;
-    color: var(--rs-muted);
     overflow: auto;
   }
 }
@@ -920,6 +1289,5 @@ function revokeUrls() {
 .reader__sheet {
   height: 62vh;
   overflow: auto;
-  background: var(--rs-bg, #fff);
 }
 </style>

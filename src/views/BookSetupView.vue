@@ -1,69 +1,108 @@
 <template>
   <div class="setup">
     <VanNavBar title="开书设置" left-arrow @click-left="goLibrary" />
-    <p v-if="missing" class="setup__hint">找不到这本书。</p>
+    <VanEmpty v-if="missing" description="找不到这本书" />
     <form v-else class="setup__form" @submit.prevent="save">
-      <h1>{{ title }}</h1>
-      <fieldset>
-        <legend>常驻书友</legend>
-        <label v-for="persona in lineup" :key="persona.role" class="setup__row">
-          <span>{{ persona.displayName }} · {{ persona.role }}</span>
-          <VanSwitch
-            :model-value="enabled[persona.role] !== false"
-            @update:model-value="setEnabled(persona.role, $event)"
-          />
-        </label>
-      </fieldset>
-      <fieldset>
-        <legend>防剧透</legend>
-        <VanRadioGroup :model-value="spoilerLevel" @update:model-value="setSpoiler">
-          <VanRadio name="严格">严格</VanRadio>
-          <VanRadio name="可暗示">可暗示</VanRadio>
-          <VanRadio name="全开放">全开放</VanRadio>
-        </VanRadioGroup>
-      </fieldset>
-      <fieldset>
-        <legend>先写后看</legend>
-        <p class="setup__note">逐段模式要先写下看法才看这段评论。章末模式要读完并写微评，才解锁这一章的段评和本章说。</p>
-        <VanRadioGroup :model-value="unlockMode" @update:model-value="setUnlock">
-          <VanRadio name="关闭">关闭</VanRadio>
-          <VanRadio name="逐段先写后看">逐段先写后看</VanRadio>
-          <VanRadio name="章末解锁">章末解锁</VanRadio>
-        </VanRadioGroup>
-      </fieldset>
-      <fieldset>
-        <legend>本章微评</legend>
-        <p class="setup__note">读到章末时，微评输入默认展开或收起。阅读中还可以再打开或关闭。</p>
-        <VanRadioGroup :model-value="microReview" @update:model-value="setMicro">
-          <VanRadio name="展开">展开</VanRadio>
-          <VanRadio name="收起">收起</VanRadio>
-        </VanRadioGroup>
-      </fieldset>
-      <label class="setup__station">
-        阅读计划站点
-        <select :value="station" @change="onStation">
-          <option :value="0">不加入</option>
-          <option v-for="item in stations" :key="item.id" :value="item.id">
-            {{ item.id }}｜{{ item.name }}
-          </option>
-        </select>
-      </label>
-      <VanButton block round type="primary" native-type="submit">保存并开始读</VanButton>
+      <h1 class="setup__title">{{ title }}</h1>
+
+      <VanCellGroup inset title="常驻书友">
+        <VanCell v-for="persona in lineup" :key="persona.role">
+          <template #title>
+            <InfoTip :text="persona.focus" :label="`${persona.displayName}关注什么`">
+              <span class="setup__persona">{{ persona.displayName }}</span>
+              <span class="setup__role">{{ persona.role }}</span>
+            </InfoTip>
+          </template>
+          <template #right-icon>
+            <VanSwitch
+              size="20px"
+              :model-value="enabled[persona.role] !== false"
+              :aria-label="`${persona.displayName}参与评论`"
+              @update:model-value="setEnabled(persona.role, $event)"
+            />
+          </template>
+        </VanCell>
+      </VanCellGroup>
+
+      <VanRadioGroup :model-value="spoilerLevel" @update:model-value="setSpoiler">
+        <VanCellGroup inset>
+          <template #title>
+            <InfoTip>
+              防剧透
+              <template #body>
+                严格：只谈已读到的内容，老书虫不出场。可暗示：可以说某处重要，但不暗示方向。全开放：不限制。
+              </template>
+            </InfoTip>
+          </template>
+          <VanCell v-for="item in spoilerOptions" :key="item" :title="item" clickable @click="setSpoiler(item)">
+            <template #right-icon><VanRadio :name="item" /></template>
+          </VanCell>
+        </VanCellGroup>
+      </VanRadioGroup>
+
+      <VanRadioGroup :model-value="unlockMode" @update:model-value="setUnlock">
+        <VanCellGroup inset>
+          <template #title>
+            <InfoTip text="逐段：先写下看法才看这段评论。章末：读完并写微评，才解锁这一章的段评和本章说。">
+              先写后看
+            </InfoTip>
+          </template>
+          <VanCell v-for="item in unlockOptions" :key="item" :title="item" clickable @click="setUnlock(item)">
+            <template #right-icon><VanRadio :name="item" /></template>
+          </VanCell>
+        </VanCellGroup>
+      </VanRadioGroup>
+
+      <VanCellGroup inset>
+        <template #title>
+          <InfoTip text="读到章末时，微评输入框默认展开还是收起。阅读中随时可以再打开或关闭。">本章微评</InfoTip>
+        </template>
+        <VanCell title="默认展开" center>
+          <template #right-icon>
+            <VanSwitch size="20px" :model-value="microOpen" aria-label="微评默认展开" @update:model-value="microOpen = $event" />
+          </template>
+        </VanCell>
+      </VanCellGroup>
+
+      <VanCellGroup inset title="阅读计划">
+        <VanCell title="站点" :value="stationLabel" is-link @click="pickerOpen = true" />
+      </VanCellGroup>
+
+      <div class="setup__footer">
+        <VanButton block round type="primary" native-type="submit">保存并开始读</VanButton>
+      </div>
     </form>
+
+    <VanPopup v-model:show="pickerOpen" position="bottom" round>
+      <VanPicker
+        title="阅读计划站点"
+        :columns="stationColumns"
+        :model-value="[station]"
+        @confirm="onStation"
+        @cancel="pickerOpen = false"
+      />
+    </VanPopup>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Button as VanButton,
+  Cell as VanCell,
+  CellGroup as VanCellGroup,
+  Empty as VanEmpty,
   NavBar as VanNavBar,
+  Picker as VanPicker,
+  Popup as VanPopup,
   Radio as VanRadio,
   RadioGroup as VanRadioGroup,
   Switch as VanSwitch,
   showToast,
+  type PickerConfirmEventParams,
 } from 'vant'
+import InfoTip from '@/components/common/InfoTip.vue'
 import { READING_STATIONS } from '@/core/stations'
 import { DEFAULT_LINEUP } from '@/core/personas'
 import type { SpoilerLevel, UnlockMode } from '@/core/types'
@@ -71,15 +110,23 @@ import { getBook, updateBookSettings } from '@/db/repos/library'
 
 const route = useRoute()
 const router = useRouter()
-const stations = READING_STATIONS
 const lineup = DEFAULT_LINEUP
+const spoilerOptions: SpoilerLevel[] = ['严格', '可暗示', '全开放']
+const unlockOptions: UnlockMode[] = ['关闭', '逐段先写后看', '章末解锁']
+const stationColumns = [
+  { text: '不加入', value: 0 },
+  ...READING_STATIONS.map((item) => ({ text: `${item.id}｜${item.name}`, value: item.id })),
+]
 const title = ref('')
 const missing = ref(false)
 const spoilerLevel = ref<SpoilerLevel>('严格')
 const unlockMode = ref<UnlockMode>('关闭')
-const microReview = ref<'展开' | '收起'>('展开')
+const microOpen = ref(true)
 const station = ref(0)
+const pickerOpen = ref(false)
 const enabled = reactive<Record<string, boolean>>({})
+
+const stationLabel = computed(() => stationColumns.find((item) => item.value === station.value)?.text ?? '不加入')
 
 onMounted(async () => {
   const book = await getBook(String(route.params.bookId))
@@ -90,7 +137,7 @@ onMounted(async () => {
   title.value = book.title
   spoilerLevel.value = book.spoilerLevel
   unlockMode.value = book.unlockMode
-  microReview.value = book.microReviewOpen === false ? '收起' : '展开'
+  microOpen.value = book.microReviewOpen !== false
   station.value = book.station ?? 0
   for (const persona of lineup) enabled[persona.role] = book.lineup[persona.role] !== false
 })
@@ -99,20 +146,17 @@ function setEnabled(role: string, value: boolean) {
   enabled[role] = value
 }
 
-function setSpoiler(value: string | number) {
+function setSpoiler(value: unknown) {
   if (value === '严格' || value === '可暗示' || value === '全开放') spoilerLevel.value = value
 }
 
-function setUnlock(value: string | number) {
+function setUnlock(value: unknown) {
   if (value === '关闭' || value === '逐段先写后看' || value === '章末解锁') unlockMode.value = value
 }
 
-function setMicro(value: string | number) {
-  if (value === '展开' || value === '收起') microReview.value = value
-}
-
-function onStation(event: Event) {
-  station.value = Number((event.target as HTMLSelectElement).value)
+function onStation({ selectedValues }: PickerConfirmEventParams) {
+  station.value = Number(selectedValues[0] ?? 0)
+  pickerOpen.value = false
 }
 
 async function save() {
@@ -121,7 +165,7 @@ async function save() {
     await updateBookSettings(bookId, {
       spoilerLevel: spoilerLevel.value,
       unlockMode: unlockMode.value,
-      microReviewOpen: microReview.value === '展开',
+      microReviewOpen: microOpen.value,
       station: station.value || null,
       lineup: { ...enabled },
     })
@@ -144,59 +188,43 @@ function goLibrary() {
 }
 
 .setup__form {
-  max-width: 560px;
+  max-width: 600px;
   margin: 0 auto;
-  padding: 20px 20px 40px;
-
-  h1 {
-    margin: 0 0 16px;
-    font-size: 24px;
-  }
-
-  fieldset {
-    border: 1px solid var(--rs-border);
-    border-radius: 12px;
-    margin: 0 0 16px;
-    padding: 12px 16px 16px;
-  }
-
-  legend {
-    padding: 0 6px;
-  }
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
 }
 
-.setup__row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
+.setup__title {
+  margin: var(--rs-space-5) var(--rs-space-4) var(--rs-space-1);
+  font-family: var(--rs-font-reading);
+  font-size: var(--rs-text-xl);
+  font-weight: 600;
 }
 
-.setup__note,
-.setup__hint {
+.setup__persona {
+  font-weight: 500;
+}
+
+.setup__role {
+  margin-left: var(--rs-space-2);
   color: var(--rs-muted);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--rs-text-xs);
 }
 
-.setup__station {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 20px;
+.setup__footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: var(--rs-space-3) var(--rs-space-4) calc(var(--rs-space-3) + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(to top, var(--rs-bg) 70%, transparent);
 
-  select {
-    height: 40px;
-    border-radius: 8px;
-    border: 1px solid var(--rs-border);
-    background: var(--rs-surface);
-    color: inherit;
-    padding: 0 8px;
+  .van-button {
+    max-width: 568px;
+    margin: 0 auto;
   }
 }
 
-:deep(.van-radio) {
-  margin: 8px 0;
+:deep(.van-cell-group__title) {
+  padding-top: var(--rs-space-5);
 }
 </style>

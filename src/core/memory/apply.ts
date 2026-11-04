@@ -1,7 +1,7 @@
 import type { MemoryUpdates } from '../generation/schema'
 import type { BookMemory, Prediction } from '../types'
 
-export function emptyMemory(bookId = 'phase0'): BookMemory {
+export function emptyMemory(bookId = ''): BookMemory {
   return {
     bookId,
     nicknames: [],

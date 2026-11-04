@@ -28,11 +28,6 @@ export const router = createRouter({
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),
     },
-    {
-      path: '/phase0',
-      name: 'phase0',
-      component: () => import('@/views/Phase0View.vue'),
-    },
   ],
 })
 

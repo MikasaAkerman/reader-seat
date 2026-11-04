@@ -1,63 +1,134 @@
 <template>
   <section class="panel" :style="{ paddingBottom: lift ? `${lift + 16}px` : undefined }">
-    <header class="panel__title">
-      <span>段评</span>
-      <button type="button" @click="emit('close')">关闭</button>
+    <header class="panel__head">
+      <h2 class="panel__title">
+        段评
+        <span v-if="!locked && total > 0" class="panel__count">{{ total }}</span>
+      </h2>
+      <IconButton icon="cross" label="关闭" variant="muted" @click="emit('close')" />
     </header>
-    <p v-if="locked" class="panel__empty">先写下你的看法，再看这段评论。</p>
-    <template v-else>
-      <p v-if="pending && threads.length === 0" class="panel__empty">书友正在写。</p>
-      <p v-else-if="failed && threads.length === 0" class="panel__empty">这段没能生成。</p>
-      <p v-else-if="threads.length === 0" class="panel__empty">这段还没有评论。</p>
-      <ThreadItem
-        v-for="thread in threads"
-        :key="thread.id"
-        :thread="thread"
-        @reply="(id, name) => emit('reply', id, name)"
-        @mark="(id, mark, on) => emit('mark', id, mark, on)"
-      />
-      <div v-if="batchCount > 1" class="panel__batches">
-        <button type="button" @click="emit('batch', -1)">上一批</button>
-        <span>第 {{ batchNo }} 批 / {{ batchCount }}</span>
-        <button type="button" @click="emit('batch', 1)">下一批</button>
+
+    <div class="panel__body">
+      <div v-if="locked" class="panel__state">
+        <VanIcon name="lock" />
+        <span>先写下你的看法，再看这段评论</span>
       </div>
-      <button class="panel__retry" type="button" :disabled="rerollsLeft <= 0" @click="emit('reroll')">
-        换一批<span v-if="rerollsLeft <= 0">（今天已用完）</span>
-      </button>
-      <p v-if="rerollMessage" class="panel__empty">{{ rerollMessage }}</p>
-    </template>
-    <p v-if="replying" class="panel__empty">书友正在接话。</p>
-    <p v-if="replyFailed" class="panel__empty">书友没接上话。</p>
-    <button v-if="failed" class="panel__retry" type="button" @click="emit('retry')">重试</button>
-    <button v-if="replyFailed" class="panel__retry" type="button" @click="emit('retryReply')">重试</button>
+      <template v-else>
+        <div v-if="pending && threads.length === 0" class="panel__state">
+          <VanLoading size="20px" />
+          <span>书友正在写</span>
+        </div>
+        <div v-else-if="failed && threads.length === 0" class="panel__state">
+          <VanIcon name="warning-o" />
+          <span>这段没能生成</span>
+          <IconButton icon="replay" label="重试" show-label variant="accent" @click="emit('retry')" />
+        </div>
+        <div v-else-if="threads.length === 0" class="panel__state">
+          <VanIcon name="chat-o" />
+          <span>还没有评论，写第一句</span>
+        </div>
+
+        <ThreadItem
+          v-for="thread in threads"
+          :key="thread.id"
+          :thread="thread"
+          @reply="(id, name) => emit('reply', id, name)"
+          @mark="(id, mark, on) => emit('mark', id, mark, on)"
+        />
+
+        <IconButton
+          v-if="failed && threads.length > 0"
+          icon="replay"
+          label="重试生成"
+          show-label
+          variant="accent"
+          @click="emit('retry')"
+        />
+
+        <div v-if="threads.length > 0 || batchCount > 1" class="panel__tools">
+          <div v-if="batchCount > 1" class="panel__pager">
+            <IconButton icon="arrow-left" label="上一批" :disabled="batchNo <= 1" @click="emit('batch', -1)" />
+            <span>第 {{ batchNo }}/{{ batchCount }} 批</span>
+            <IconButton icon="arrow" label="下一批" :disabled="batchNo >= batchCount" @click="emit('batch', 1)" />
+          </div>
+          <IconButton
+            class="panel__reroll"
+            icon="replay"
+            :label="rerollsLeft > 0 ? `换一批（今天还剩 ${rerollsLeft} 次）` : '换一批（今天已用完）'"
+            variant="muted"
+            :disabled="rerollsLeft <= 0"
+            @click="emit('reroll')"
+          >
+            <span class="panel__reroll-text">换一批 · {{ rerollsLeft }}</span>
+          </IconButton>
+        </div>
+        <p v-if="rerollMessage" class="panel__note">{{ rerollMessage }}</p>
+      </template>
+
+      <div v-if="replying" class="panel__note panel__note--live">
+        <VanLoading size="14px" />
+        <span>书友正在接话</span>
+      </div>
+      <div v-if="replyFailed" class="panel__note">
+        <VanIcon name="warning-o" />
+        <span>书友没接上话</span>
+        <IconButton icon="replay" label="重试" show-label variant="accent" @click="emit('retryReply')" />
+      </div>
+    </div>
+
     <form class="panel__composer" @submit.prevent="submit">
-      <p v-if="replyTo" class="panel__replying">
-        回复 {{ replyTo.name }}
-        <button type="button" @click="emit('cancelReply')">取消</button>
-      </p>
-      <div class="panel__mentions">
+      <div v-if="replyTo || mention" class="panel__tags">
+        <VanTag v-if="replyTo" closeable round type="primary" plain size="medium" @close="emit('cancelReply')">
+          回复 {{ replyTo.name }}
+        </VanTag>
+        <VanTag v-if="mention" closeable round type="primary" plain size="medium" @close="mention = ''">
+          @{{ mention }}
+        </VanTag>
+      </div>
+      <div v-if="mentionsOpen" class="panel__mentions" role="listbox" aria-label="@ 书友">
         <button
           v-for="name in residents"
           :key="name"
           type="button"
+          role="option"
+          :aria-selected="mention === name"
           :class="{ 'is-on': mention === name }"
-          @click="mention = mention === name ? '' : name"
+          @click="pickMention(name)"
         >
-          @{{ name }}
+          {{ name }}
         </button>
       </div>
-      <textarea v-model="draft" rows="2" placeholder="写一句段评" />
-      <button type="submit" :disabled="!draft.trim()">发送</button>
+      <div class="panel__input">
+        <IconButton
+          v-if="residents.length > 0"
+          icon="friends-o"
+          label="@ 书友"
+          :active="mentionsOpen"
+          variant="muted"
+          @click="mentionsOpen = !mentionsOpen"
+        />
+        <textarea v-model="draft" rows="1" placeholder="写一句段评" aria-label="段评内容" @input="grow" />
+        <IconButton
+          icon="guide-o"
+          label="发送"
+          variant="accent"
+          type="submit"
+          :disabled="!draft.trim()"
+          class="panel__send"
+        />
+      </div>
     </form>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Icon as VanIcon, Loading as VanLoading, Tag as VanTag } from 'vant'
+import IconButton from '@/components/common/IconButton.vue'
 import type { CommentMarks, ReaderThread } from '@/db/repos/comments'
 import ThreadItem from './ThreadItem.vue'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     threads: ReaderThread[]
     pending: boolean
@@ -95,14 +166,31 @@ const emit = defineEmits<{
 
 const draft = ref('')
 const mention = ref('')
+const mentionsOpen = ref(false)
 const lift = ref(0)
 
-function submit() {
+const total = computed(() => props.threads.reduce((sum, thread) => sum + 1 + thread.replies.length, 0))
+
+function pickMention(name: string) {
+  mention.value = mention.value === name ? '' : name
+  mentionsOpen.value = false
+}
+
+function grow(event: Event) {
+  const el = event.target as HTMLTextAreaElement
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+}
+
+function submit(event: Event) {
   const text = draft.value.trim()
   if (!text) return
   emit('submit', { text, mention: mention.value })
   draft.value = ''
   mention.value = ''
+  mentionsOpen.value = false
+  const area = (event.target as HTMLFormElement).querySelector('textarea')
+  if (area) area.style.height = ''
 }
 
 function placeComposer() {
@@ -125,84 +213,156 @@ onBeforeUnmount(() => {
 
 <style scoped lang="less">
 .panel {
-  padding: 8px 16px 24px;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-height: 100%;
+  box-sizing: border-box;
   color: var(--rs-text, #1c1917);
+}
+
+.panel__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--rs-space-2) var(--rs-space-2) var(--rs-space-2) var(--rs-space-4);
+  border-bottom: 1px solid var(--rs-border);
+  background: var(--rs-surface);
 }
 
 .panel__title {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
+  gap: var(--rs-space-2);
   margin: 0;
-  font-size: 16px;
+  font-size: var(--rs-text-md);
+  font-weight: 600;
+}
 
-  button {
-    border: 0;
-    background: transparent;
-    color: var(--rs-accent, #0f766e);
+.panel__count {
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
+  font-weight: 400;
+}
+
+.panel__body {
+  flex: 1;
+  padding: 0 var(--rs-space-4) var(--rs-space-3);
+}
+
+.panel__state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--rs-space-2);
+  padding: var(--rs-space-6) 0;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
+
+  > .van-icon {
+    font-size: 28px;
+    opacity: 0.6;
   }
 }
 
-.panel__empty {
-  color: var(--rs-muted, #78716c);
+.panel__tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rs-space-2);
+  margin-top: var(--rs-space-2);
 }
 
-.panel__retry {
-  margin-top: 12px;
-  border: 0;
-  border-radius: 999px;
-  padding: 8px 14px;
-  background: var(--rs-accent, #0f766e);
-  color: white;
+.panel__pager {
+  display: flex;
+  align-items: center;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel__reroll {
+  margin-left: auto;
+}
+
+.panel__reroll-text {
+  font-size: var(--rs-text-xs);
+}
+
+.panel__note {
+  display: flex;
+  align-items: center;
+  gap: var(--rs-space-2);
+  margin: var(--rs-space-2) 0 0;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
 }
 
 .panel__composer {
   position: sticky;
   bottom: 0;
+  padding: var(--rs-space-2) var(--rs-space-3) var(--rs-space-3);
+  border-top: 1px solid var(--rs-border);
+  background: var(--rs-surface);
+}
+
+.panel__tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 16px;
-  padding-top: 12px;
-  background: var(--rs-bg, #fff);
+  gap: var(--rs-space-2);
+  margin-bottom: var(--rs-space-2);
+}
+
+.panel__mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rs-space-2);
+  margin-bottom: var(--rs-space-2);
+
+  button {
+    padding: 4px 12px;
+    border: 1px solid var(--rs-border);
+    border-radius: 999px;
+    background: var(--rs-bg);
+    color: var(--rs-text);
+    font: inherit;
+    font-size: var(--rs-text-sm);
+    cursor: pointer;
+  }
+
+  .is-on {
+    border-color: var(--rs-accent);
+    color: var(--rs-accent);
+  }
+}
+
+.panel__input {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--rs-space-1);
 
   textarea {
     flex: 1;
-    min-width: 12rem;
-    border: 1px solid var(--rs-border, #e7e5e4);
-    border-radius: 12px;
-    padding: 8px;
+    min-width: 0;
+    min-height: 40px;
+    box-sizing: border-box;
+    padding: 9px var(--rs-space-3);
+    border: 1px solid var(--rs-border);
+    border-radius: 20px;
+    background: var(--rs-bg);
     color: inherit;
-    background: transparent;
+    font: inherit;
+    font-size: var(--rs-text-md);
+    line-height: 1.4;
+    resize: none;
+    outline: none;
+
+    &:focus {
+      border-color: var(--rs-accent);
+    }
   }
-
-  button[type='submit'] {
-    border: 0;
-    border-radius: 999px;
-    padding: 8px 14px;
-    background: var(--rs-accent, #0f766e);
-    color: white;
-  }
-}
-
-.panel__mentions,
-.panel__replying {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  width: 100%;
-  margin: 0;
-}
-
-.panel__mentions button,
-.panel__replying button {
-  border: 0;
-  background: transparent;
-  color: var(--rs-accent, #0f766e);
-  padding: 0;
-}
-
-.panel__mentions .is-on {
-  font-weight: 700;
 }
 </style>

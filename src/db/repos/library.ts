@@ -24,6 +24,8 @@ export interface BookCard {
   title: string
   author: string
   progress: string
+  /** 0 到 1，按当前章在全书中的位置估算 */
+  ratio: number
   fileMissing: boolean
 }
 
@@ -316,6 +318,7 @@ export async function listBookCards(): Promise<BookCard[]> {
       title: book.title,
       author: book.author,
       progress: book.fileMissing ? '需要重新导入文件' : progressLabel(chapters, state),
+      ratio: progressRatio(chapters, state),
       fileMissing: book.fileMissing === true,
     })
   }
@@ -327,6 +330,13 @@ function progressLabel(chapters: ChapterRow[], state: ReadingStateRow | undefine
   if (chapters.length > 0 && chapters.every((chapter) => chapter.readStatus === 'done')) return '已读完'
   const chapter = chapters.find((item) => item.id === state.chapterId)
   return chapter ? `读到${chapter.title}` : '未读'
+}
+
+function progressRatio(chapters: ChapterRow[], state: ReadingStateRow | undefined): number {
+  if (!state || chapters.length === 0) return 0
+  if (chapters.every((chapter) => chapter.readStatus === 'done')) return 1
+  const index = chapters.findIndex((item) => item.id === state.chapterId)
+  return index < 0 ? 0 : (index + 1) / chapters.length
 }
 
 export async function getBook(bookId: string): Promise<BookRow | undefined> {
