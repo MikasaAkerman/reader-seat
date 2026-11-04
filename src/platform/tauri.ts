@@ -1,10 +1,24 @@
+import { open, save } from '@tauri-apps/plugin-dialog'
+import {
+  BaseDirectory,
+  exists,
+  mkdir,
+  readFile,
+  remove,
+  writeFile,
+  writeTextFile,
+} from '@tauri-apps/plugin-fs'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
-import { LazyStore } from '@tauri-apps/plugin-store'
 import { type as osType } from '@tauri-apps/plugin-os'
+import { LazyStore } from '@tauri-apps/plugin-store'
 import type { Platform, PlatformKind } from './types'
 import { notImplemented } from './types'
 
 const secretStore = new LazyStore('secrets.json')
+
+function bookPath(bookId: string): string {
+  return `books/${bookId}.epub`
+}
 
 function resolveKind(): PlatformKind {
   try {
@@ -21,20 +35,41 @@ export function createTauriPlatform(): Platform {
     kind: resolveKind(),
     fetch: tauriFetch as unknown as typeof fetch,
 
-    pickBookFile() {
-      return notImplemented('pickBookFile')
+    async pickBookFile() {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'EPUB', extensions: ['epub'] }],
+      })
+      if (typeof selected !== 'string') return null
+      const bytes = await readFile(selected)
+      const name = selected.split(/[/\\]/).pop() || 'book.epub'
+      return { name, bytes }
     },
-    saveBookFile() {
-      return notImplemented('saveBookFile')
+    async saveBookFile(bookId, bytes) {
+      if (!(await exists('books', { baseDir: BaseDirectory.AppData }))) {
+        await mkdir('books', { baseDir: BaseDirectory.AppData, recursive: true })
+      }
+      await writeFile(bookPath(bookId), bytes, { baseDir: BaseDirectory.AppData })
     },
-    readBookFile() {
-      return notImplemented('readBookFile')
+    async readBookFile(bookId) {
+      return readFile(bookPath(bookId), { baseDir: BaseDirectory.AppData })
     },
-    deleteBookFile() {
-      return notImplemented('deleteBookFile')
+    async deleteBookFile(bookId) {
+      if (await exists(bookPath(bookId), { baseDir: BaseDirectory.AppData })) {
+        await remove(bookPath(bookId), { baseDir: BaseDirectory.AppData })
+      }
     },
-    exportTextFile() {
-      return notImplemented('exportTextFile')
+    async exportTextFile(fileName, content) {
+      if (resolveKind() === 'android') {
+        await writeTextFile(fileName, content, { baseDir: BaseDirectory.Download })
+        return
+      }
+      const path = await save({
+        defaultPath: fileName,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      })
+      if (!path) return
+      await writeTextFile(path, content)
     },
 
     async getSecret(key) {

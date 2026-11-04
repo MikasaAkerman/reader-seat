@@ -26,6 +26,7 @@ export default tseslint.config(
       },
     },
     rules: {
+      'no-undef': 'off',
       'vue/multi-word-component-names': 'off',
       'no-restricted-imports': [
         'error',

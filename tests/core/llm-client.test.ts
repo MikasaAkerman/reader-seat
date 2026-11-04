@@ -31,6 +31,10 @@ describe('createLlmClient', () => {
       [{ role: 'user', content: 'json {"ok":true}' }],
       pingSchema,
     )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.deepseek.com/v1/chat/completions',
+      expect.anything(),
+    )
     expect(data.ok).toBe(true)
     expect(usage.promptTokens).toBe(10)
     expect(usage.completionTokens).toBe(2)
@@ -65,5 +69,25 @@ describe('createLlmClient', () => {
     expect(text).toBe('通')
     expect(usage.promptTokens).toBe(3)
     expect(usage.completionTokens).toBe(1)
+  })
+
+  it('does not duplicate /v1 when the base URL already includes it', async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+        status: 200,
+      })
+    }) as unknown as typeof fetch
+
+    const client = createLlmClient({
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'test-key',
+      model: 'openrouter/free',
+      fetch: fetchMock,
+    })
+    await client.chatJson([{ role: 'user', content: 'json' }], pingSchema)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://openrouter.ai/api/v1/chat/completions',
+      expect.anything(),
+    )
   })
 })

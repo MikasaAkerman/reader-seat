@@ -1,26 +1,98 @@
 import Dexie, { type EntityTable } from 'dexie'
+import type { SpoilerLevel, UnlockMode } from '@/core/types'
 
-/** M0：表键与技术方案 §4.8 对齐；字段在后续里程碑按需细化。 */
+export type ReadStatus = 'unread' | 'reading' | 'done'
+export type GenStatus = 'none' | 'rough' | 'refining' | 'refined' | 'failed'
+export type ParagraphKind = 'heading' | 'body'
+
 export interface SettingsRow {
   key: string
   value: unknown
 }
 
+export interface BookRow {
+  id: string
+  title: string
+  author: string
+  translator: string
+  fingerprint: string
+  station: number | null
+  spoilerLevel: SpoilerLevel
+  unlockMode: UnlockMode
+  lineup: Record<string, boolean>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ChapterRow {
+  id: string
+  bookId: string
+  order: number
+  href: string
+  title: string
+  readStatus: ReadStatus
+}
+
+export interface ParagraphRow {
+  id: string
+  bookId: string
+  chapterId: string
+  order: number
+  anchor: string
+  text: string
+  html: string
+  textHash: string
+  kind: ParagraphKind
+  genStatus: GenStatus
+}
+
+export interface ReadingStateRow {
+  bookId: string
+  chapterId: string
+  paragraphIndex: number
+  offsetRatio: number
+  /** 每章已读到的最大段落序号 */
+  readUpTo: Record<string, number>
+  updatedAt: string
+}
+
+export interface BookFileRow {
+  bookId: string
+  bytes: Uint8Array
+}
+
+export interface CommentRow {
+  id: string
+  batchId: string
+  paragraphId: string
+  parentId: string
+  authorType: string
+  mismatched?: boolean
+}
+
+/** 只为按已有索引删除关联行，字段在后续里程碑补全。 */
+interface ScopedRow {
+  id: string
+  bookId: string
+  chapterId: string
+  paragraphId: string
+}
+
 export class ReaderSeatDB extends Dexie {
-  books!: EntityTable<Record<string, unknown>, 'id'>
-  chapters!: EntityTable<Record<string, unknown>, 'id'>
-  paragraphs!: EntityTable<Record<string, unknown>, 'id'>
-  residentReaders!: EntityTable<Record<string, unknown>, 'id'>
-  bookMemories!: EntityTable<Record<string, unknown>, 'bookId'>
-  predictions!: EntityTable<Record<string, unknown>, 'id'>
-  commentBatches!: EntityTable<Record<string, unknown>, 'id'>
-  comments!: EntityTable<Record<string, unknown>, 'id'>
-  userNotes!: EntityTable<Record<string, unknown>, 'id'>
-  chapterTalks!: EntityTable<Record<string, unknown>, 'id'>
-  readingStates!: EntityTable<Record<string, unknown>, 'bookId'>
-  generationLogs!: EntityTable<Record<string, unknown>, 'id'>
+  books!: EntityTable<BookRow, 'id'>
+  chapters!: EntityTable<ChapterRow, 'id'>
+  paragraphs!: EntityTable<ParagraphRow, 'id'>
+  residentReaders!: EntityTable<ScopedRow, 'id'>
+  bookMemories!: EntityTable<{ bookId: string }, 'bookId'>
+  predictions!: EntityTable<ScopedRow, 'id'>
+  commentBatches!: EntityTable<ScopedRow, 'id'>
+  comments!: EntityTable<CommentRow, 'id'>
+  userNotes!: EntityTable<ScopedRow, 'id'>
+  chapterTalks!: EntityTable<ScopedRow, 'id'>
+  readingStates!: EntityTable<ReadingStateRow, 'bookId'>
+  generationLogs!: EntityTable<ScopedRow, 'id'>
   settings!: EntityTable<SettingsRow, 'key'>
-  bookFiles!: EntityTable<Record<string, unknown>, 'bookId'>
+  bookFiles!: EntityTable<BookFileRow, 'bookId'>
 
   constructor() {
     super('reader-seat')

@@ -11,7 +11,12 @@ import {
 } from './types'
 
 function joinUrl(baseUrl: string, path: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}${path}`
+  const base = baseUrl.replace(/\/+$/, '')
+  const suffix = path.startsWith('/') ? path : `/${path}`
+  if (suffix.startsWith('/v1/') && base.endsWith('/v1')) {
+    return `${base}${suffix.slice('/v1'.length)}`
+  }
+  return `${base}${suffix}`
 }
 
 function sleep(ms: number): Promise<void> {

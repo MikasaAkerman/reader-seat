@@ -5,6 +5,20 @@ import { createLlmClient } from '@/core/llm'
 import { getSetting, setSetting } from '@/db/repos/settings'
 import { platform } from '@/platform'
 
+export type ReaderTheme = 'day' | 'eye' | 'night'
+
+export interface ReaderDisplay {
+  fontSize: number
+  lineHeight: number
+  theme: ReaderTheme
+}
+
+export const DEFAULT_DISPLAY: ReaderDisplay = {
+  fontSize: 18,
+  lineHeight: 1.85,
+  theme: 'day',
+}
+
 const DEFAULT_BASE_URL = 'https://api.deepseek.com'
 const DEFAULT_MODEL = 'deepseek-chat'
 const API_KEY_SECRET = 'apiKey'
@@ -18,6 +32,32 @@ export const useSettingsStore = defineStore('settings', () => {
   const model = ref(DEFAULT_MODEL)
   const apiKey = ref('')
   const loaded = ref(false)
+  const display = ref<ReaderDisplay>({ ...DEFAULT_DISPLAY })
+
+  function applyDisplay(next: ReaderDisplay = display.value) {
+    const root = document.documentElement
+    root.dataset.readerTheme = next.theme
+    root.style.setProperty('--rs-font-size', `${next.fontSize}px`)
+    root.style.setProperty('--rs-line-height', String(next.lineHeight))
+  }
+
+  async function loadDisplay() {
+    const saved = await getSetting<ReaderDisplay>('reader.display')
+    if (saved?.fontSize && saved.lineHeight && saved.theme) {
+      display.value = {
+        fontSize: saved.fontSize,
+        lineHeight: saved.lineHeight,
+        theme: saved.theme,
+      }
+    }
+    applyDisplay()
+  }
+
+  async function saveDisplay(next: ReaderDisplay) {
+    display.value = next
+    applyDisplay(next)
+    await setSetting('reader.display', next)
+  }
 
   async function load() {
     const [savedBase, savedModel, savedKey] = await Promise.all([
@@ -71,7 +111,7 @@ export const useSettingsStore = defineStore('settings', () => {
           },
         ],
         pingSchema,
-        { temperature: 0, maxTokens: 32, timeoutMs: 30_000 },
+        { temperature: 0, maxTokens: 256, timeoutMs: 30_000 },
       )
       jsonOk = data.ok === true
       parts.push(`JSON tokens=${usage.promptTokens}+${usage.completionTokens}`)
@@ -86,7 +126,7 @@ export const useSettingsStore = defineStore('settings', () => {
         (delta) => {
           text += delta
         },
-        { temperature: 0, maxTokens: 8, timeoutMs: 30_000 },
+        { temperature: 0, maxTokens: 128, timeoutMs: 30_000 },
       )
       streamOk = text.trim().length > 0
       parts.push(`Stream "${text.trim()}" tokens=${usage.promptTokens}+${usage.completionTokens}`)
@@ -102,7 +142,10 @@ export const useSettingsStore = defineStore('settings', () => {
     model,
     apiKey,
     loaded,
+    display,
     load,
+    loadDisplay,
+    saveDisplay,
     save,
     createClient,
     testConnection,

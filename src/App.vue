@@ -2,7 +2,14 @@
   <router-view />
 </template>
 
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { onMounted } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
+
+onMounted(() => {
+  void useSettingsStore().loadDisplay()
+})
+</script>
 
 <style>
 html,

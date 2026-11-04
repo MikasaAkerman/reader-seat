@@ -5,8 +5,38 @@
   --rs-muted: #78716c;
   --rs-accent: #0f766e;
   --rs-border: #e7e5e4;
+  --rs-font-size: 18px;
+  --rs-line-height: 1.85;
+}
+
+:root[data-reader-theme='eye'] {
+  --rs-bg: #e7f0dc;
+  --rs-surface: #f4f8ef;
+  --rs-text: #1c2416;
+  --rs-muted: #5c6b52;
+  --rs-accent: #3f6212;
+  --rs-border: #d5e0c8;
+}
+
+:root[data-reader-theme='night'] {
+  --rs-bg: #1c1917;
+  --rs-surface: #292524;
+  --rs-text: #f5f5f4;
+  --rs-muted: #a8a29e;
+  --rs-accent: #5eead4;
+  --rs-border: #44403c;
 }
 
 body {
   -webkit-font-smoothing: antialiased;
+}
+
+.van-nav-bar {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.van-popup--left,
+.van-popup--right,
+.van-popup--top {
+  padding-top: env(safe-area-inset-top, 0px);
 }
