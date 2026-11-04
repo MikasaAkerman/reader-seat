@@ -41,6 +41,22 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+function createId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0'))
+  return [
+    hex.slice(0, 4).join(''),
+    hex.slice(4, 6).join(''),
+    hex.slice(6, 8).join(''),
+    hex.slice(8, 10).join(''),
+    hex.slice(10).join(''),
+  ].join('-')
+}
+
 export function defaultLineup(): Record<string, boolean> {
   return Object.fromEntries(DEFAULT_LINEUP.map((persona) => [persona.role, true]))
 }
@@ -52,7 +68,7 @@ function rowsFromParsed(bookId: string, parsed: ParsedBook): {
   const chapters: ChapterRow[] = []
   const paragraphs: ParagraphRow[] = []
   for (const chapter of parsed.chapters) {
-    const chapterId = crypto.randomUUID()
+    const chapterId = createId()
     chapters.push({
       id: chapterId,
       bookId,
@@ -63,7 +79,7 @@ function rowsFromParsed(bookId: string, parsed: ParsedBook): {
     })
     for (const paragraph of chapter.paragraphs) {
       paragraphs.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         bookId,
         chapterId,
         order: paragraph.order,
@@ -198,7 +214,7 @@ export async function importBookBytes(bytes: Uint8Array, fileName: string): Prom
     await replaceEdition(sameTitle, parsed, bytes)
     return { status: 'updated', bookId: sameTitle.id }
   }
-  const bookId = crypto.randomUUID()
+  const bookId = createId()
   await writeRows(
     bookId,
     parsed,
