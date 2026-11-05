@@ -2,12 +2,17 @@ import { latestBatch, rootsWithUserReplies } from '@/core/comments/batches'
 import { emptyMemory } from '@/core/memory'
 import type { AuthorType, BookMemory } from '@/core/types'
 import { createId } from '../id'
+import type { CommentKind } from '../schema'
 import {
   db,
   type BookMemoryRow,
+  type CommentEvidence,
   type CommentRow,
+  type DeepSpotRow,
+  type DroppedLog,
   type GenStatus,
   type GenerationLogRow,
+  type ObservationRow,
 } from '../schema'
 
 /** 用户主楼和它下面的回复都放在这里，不属于任何一批。 */
@@ -18,6 +23,12 @@ export interface StoredComment {
   displayName: string
   role: string
   text: string
+  kind?: CommentKind
+  title?: string
+  evidence?: CommentEvidence[]
+  background?: string
+  question?: string
+  replyType?: string
   replies?: StoredComment[]
 }
 
@@ -34,6 +45,7 @@ export interface ReaderReply {
   displayName: string
   role: string
   text: string
+  kind?: CommentKind
   marks: CommentMarks
 }
 
@@ -43,6 +55,11 @@ export interface ReaderThread {
   displayName: string
   role: string
   text: string
+  kind?: CommentKind
+  title?: string
+  evidence?: CommentEvidence[]
+  background?: string
+  question?: string
   marks: CommentMarks
   replies: ReaderReply[]
 }
@@ -53,6 +70,7 @@ export interface BubbleState {
   pending: boolean
   failed: boolean
   locked?: boolean
+  deep?: boolean
 }
 
 export interface MemoryState {
@@ -83,7 +101,15 @@ export function bubbleFor(
     return { count: 0, hot: false, pending: true, failed: false }
   }
   if (!count) return null
-  return { count, hot: score === 3, pending: false, failed: false }
+  return { count, hot: score === 3, pending: false, failed: false, deep: false }
+}
+
+export async function deepParagraphIds(paragraphIds: string[]): Promise<Set<string>> {
+  if (paragraphIds.length === 0) return new Set()
+  const comments = await db.comments.where('paragraphId').anyOf(paragraphIds).toArray()
+  return new Set(
+    comments.filter((comment) => comment.kind === 'deep' && !comment.parentId && visible(comment)).map((comment) => comment.paragraphId),
+  )
 }
 
 /** 每段显示的条数：最新一批，加上用户区。 */
@@ -137,7 +163,7 @@ export async function shortReaction(paragraphId: string): Promise<{ text: string
 export function threadsFrom(comments: CommentRow[]): ReaderThread[] {
   const roots = comments
     .filter((comment) => !comment.parentId)
-    .sort((a, b) => rank(a.authorType) - rank(b.authorType) || (a.seq ?? 0) - (b.seq ?? 0))
+    .sort((a, b) => rank(a) - rank(b) || (a.seq ?? 0) - (b.seq ?? 0))
   const replies = comments.filter((comment) => comment.parentId)
   const threads = roots.map((root) => ({
     id: root.id,
@@ -145,6 +171,11 @@ export function threadsFrom(comments: CommentRow[]): ReaderThread[] {
     displayName: root.displayName,
     role: root.role,
     text: root.text,
+    kind: root.kind,
+    title: root.title,
+    evidence: root.evidence,
+    background: root.background,
+    question: root.question,
     marks: marksOf(root),
     replies: replies
       .filter((reply) => reply.parentId === root.id)
@@ -155,6 +186,7 @@ export function threadsFrom(comments: CommentRow[]): ReaderThread[] {
         displayName: reply.displayName,
         role: reply.role,
         text: reply.text,
+        kind: reply.kind,
         marks: marksOf(reply),
       })),
   }))
@@ -194,7 +226,7 @@ export async function setCommentMark(
   mark: keyof CommentMarks,
   on: boolean,
 ): Promise<void> {
-  await db.comments.update(commentId, { [mark]: on })
+  await db.comments.update(commentId, { [mark]: on } as Partial<CommentRow>)
 }
 
 const TASTE_TTL_MS = 60_000
@@ -231,10 +263,12 @@ export async function tasteExamplesFor(bookId: string): Promise<string> {
   return value
 }
 
-function rank(authorType: AuthorType): number {
-  if (authorType === 'user') return 0
-  if (authorType === 'resident') return 1
-  return 2
+function rank(comment: Pick<CommentRow, 'authorType' | 'kind'>): number {
+  if (comment.authorType === 'user') return 0
+  if (comment.kind === 'deep') return 1
+  if (comment.kind === 'background') return 2
+  if (comment.authorType === 'resident') return 3
+  return 4
 }
 
 function markKey(row: Pick<CommentRow, 'authorType' | 'displayName' | 'text'>): string {
@@ -335,8 +369,90 @@ function toRow(
     displayName: comment.displayName,
     role: comment.role,
     text: comment.text,
+    kind: comment.kind,
+    title: comment.title,
+    evidence: comment.evidence,
+    background: comment.background,
+    question: comment.question,
+    replyType: comment.replyType,
     seq,
   }
+}
+
+export async function replacePinned(paragraphId: string, kind: CommentKind, comments: StoredComment[]): Promise<void> {
+  await db.transaction('rw', [db.comments], async () => {
+    const existing = await db.comments.where('paragraphId').equals(paragraphId).toArray()
+    const pinned = existing.filter((row) => row.batchId === USER_ZONE && (row.kind === kind || existing.some((item) => item.id === row.parentId && item.kind === kind)))
+    if (pinned.length > 0) await db.comments.bulkDelete(pinned.map((row) => row.id))
+    const rows: CommentRow[] = []
+    let seq = existing.reduce((max, row) => Math.max(max, row.seq ?? 0), -1) + 1
+    for (const comment of comments) {
+      const id = createId()
+      rows.push(toRow(paragraphId, USER_ZONE, id, '', comment, seq))
+      seq += 1
+      for (const reply of comment.replies ?? []) {
+        rows.push(toRow(paragraphId, USER_ZONE, createId(), id, reply, seq))
+        seq += 1
+      }
+    }
+    if (rows.length > 0) await db.comments.bulkAdd(rows)
+  })
+}
+
+export async function listRecentCommentTexts(chapterIds: string[], limit = 100): Promise<string[]> {
+  if (chapterIds.length === 0) return []
+  const paragraphs = await db.paragraphs.where('chapterId').anyOf(chapterIds).toArray()
+  const ids = paragraphs.map((row) => row.id)
+  if (ids.length === 0) return []
+  const comments = await db.comments.where('paragraphId').anyOf(ids).toArray()
+  return comments
+    .filter((comment) => comment.authorType !== 'user' && comment.text.trim())
+    .sort((a, b) => (b.seq ?? 0) - (a.seq ?? 0))
+    .slice(0, limit)
+    .map((comment) => comment.text)
+}
+
+export async function replaceObservations(paragraphIds: string[], rows: ObservationRow[]): Promise<void> {
+  await db.transaction('rw', [db.observations], async () => {
+    if (paragraphIds.length > 0) await db.observations.where('paragraphId').anyOf(paragraphIds).delete()
+    if (rows.length > 0) await db.observations.bulkAdd(rows)
+  })
+}
+
+export async function listObservationsFor(paragraphId: string): Promise<ObservationRow[]> {
+  return db.observations.where('paragraphId').equals(paragraphId).toArray()
+}
+
+export async function listRecentAngles(chapterIds: string[], limit = 20): Promise<string[]> {
+  if (chapterIds.length === 0) return []
+  const rows = await db.observations.where('chapterId').anyOf(chapterIds).toArray()
+  return rows
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, limit)
+    .map((row) => `${row.kind}：${row.point}`)
+}
+
+export async function listDeepSpots(chapterId: string): Promise<DeepSpotRow[]> {
+  return db.deepSpots.where('chapterId').equals(chapterId).toArray()
+}
+
+export async function saveDeepSpots(rows: DeepSpotRow[]): Promise<void> {
+  if (rows.length === 0) return
+  await db.deepSpots.bulkPut(rows)
+}
+
+export async function updateDeepSpot(id: string, patch: Partial<DeepSpotRow>): Promise<void> {
+  await db.deepSpots.update(id, patch)
+}
+
+export async function listCommentsForDiversity(bookId: string, limit = 200): Promise<string[]> {
+  const paragraphs = await db.paragraphs.where('bookId').equals(bookId).primaryKeys()
+  if (paragraphs.length === 0) return []
+  const comments = await db.comments.where('paragraphId').anyOf(paragraphs as string[]).toArray()
+  return comments
+    .filter((comment) => comment.authorType !== 'user' && comment.text.trim())
+    .slice(-limit)
+    .map((comment) => comment.text)
 }
 
 export async function markParagraph(paragraphId: string, genStatus: GenStatus, score?: number | null): Promise<void> {
@@ -407,6 +523,8 @@ export async function updateMemory(bookId: string, fn: (state: MemoryState) => M
     return next
   })
 }
+
+export type { DroppedLog, ObservationRow, DeepSpotRow }
 
 export async function writeGenerationLog(entry: Omit<GenerationLogRow, 'id' | 'createdAt'>): Promise<void> {
   await db.generationLogs.add({

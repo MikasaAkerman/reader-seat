@@ -29,7 +29,7 @@ export function pickRepliers(input: {
     authorType: 'resident',
     role: persona.role,
     displayName: persona.displayName,
-    voice: persona.voiceSamples[0] ?? '',
+    voice: persona.voice,
   })
 
   const mentioned = input.mention

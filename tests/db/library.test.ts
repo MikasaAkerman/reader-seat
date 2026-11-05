@@ -47,6 +47,8 @@ beforeEach(async () => {
     db.commentBatches.clear(),
     db.userNotes.clear(),
     db.chapterTalks.clear(),
+    db.observations.clear(),
+    db.deepSpots.clear(),
   ])
 })
 

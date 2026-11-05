@@ -7,9 +7,22 @@
       <div class="thread__content">
         <header class="thread__meta">
           <strong>{{ thread.displayName }}</strong>
-          <span v-if="badge(thread.authorType)" class="thread__badge">{{ badge(thread.authorType) }}</span>
+          <span v-if="kindBadge" class="thread__badge">{{ kindBadge }}</span>
+          <span v-else-if="badge(thread.authorType)" class="thread__badge">{{ badge(thread.authorType) }}</span>
         </header>
-        <p class="thread__text">{{ thread.text }}</p>
+        <h3 v-if="thread.title" class="thread__title">{{ thread.title }}</h3>
+        <p class="thread__text" :class="{ 'thread__text--fold': foldable && !expandedBody }">{{ thread.text }}</p>
+        <button v-if="foldable" type="button" class="thread__more" @click="expandedBody = !expandedBody">
+          {{ expandedBody ? '收起' : '展开全文' }}
+        </button>
+        <blockquote v-for="(item, index) in thread.evidence ?? []" :key="index" class="thread__quote">
+          {{ item.quote }}
+        </blockquote>
+        <details v-if="thread.background" class="thread__background">
+          <summary>背景知识，未核实</summary>
+          <p>{{ thread.background }}</p>
+        </details>
+        <p v-if="thread.question" class="thread__question">问一句：{{ thread.question }}</p>
         <div class="thread__actions">
           <span v-if="flagged(thread.marks)" class="thread__flag">已标{{ flagged(thread.marks) }}</span>
           <IconButton icon="chat-o" label="回复" variant="muted" @click="emit('reply', thread.id, thread.displayName)" />
@@ -92,6 +105,13 @@ const FLAGS: { id: FlagKey; label: string }[] = [
 ]
 
 const expanded = ref(false)
+const expandedBody = ref(false)
+const foldable = computed(() => props.thread.kind === 'deep' && props.thread.text.length > 160)
+const kindBadge = computed(() => {
+  if (props.thread.kind === 'deep') return '长评'
+  if (props.thread.kind === 'background') return '背景知识，未核实'
+  return ''
+})
 const marksOpen = ref(false)
 const target = ref<Marked | null>(null)
 const shown = computed(() => (expanded.value ? props.thread.replies : props.thread.replies.slice(0, 2)))
@@ -192,11 +212,56 @@ function onMark(_action: ActionSheetAction, index: number) {
   line-height: 16px;
 }
 
+.thread__title {
+  margin: var(--rs-space-1) 0 0;
+  font-size: var(--rs-text-sm);
+  font-weight: 600;
+}
+
 .thread__text {
   margin: var(--rs-space-1) 0 0;
   font-size: var(--rs-text-md);
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+
+.thread__text--fold {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+
+.thread__quote {
+  margin: var(--rs-space-2) 0 0;
+  padding: 0 0 0 var(--rs-space-3);
+  border-left: 2px solid var(--rs-accent-soft, #ccfbf1);
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
+}
+
+.thread__background {
+  margin: var(--rs-space-2) 0 0;
+  padding: var(--rs-space-2);
+  border-radius: 8px;
+  background: var(--rs-surface-2);
+  color: var(--rs-muted);
+  font-size: var(--rs-text-xs);
+
+  summary {
+    cursor: pointer;
+  }
+
+  p {
+    margin: var(--rs-space-1) 0 0;
+    line-height: 1.6;
+  }
+}
+
+.thread__question {
+  margin: var(--rs-space-2) 0 0;
+  color: var(--rs-accent);
+  font-size: var(--rs-text-sm);
 }
 
 .thread__actions {

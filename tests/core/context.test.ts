@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CONTEXT_BUDGET,
   chapterDigest,
   entitiesForPrompt,
   laterNames,
@@ -10,6 +11,12 @@ import {
 const rows = (texts: string[]) => texts.map((text, index) => ({ order: index + 1, text }))
 
 describe('context budgets', () => {
+  it('widens refine and deep scenes', () => {
+    expect(CONTEXT_BUDGET.refineUntilHot).toBe(4000)
+    expect(CONTEXT_BUDGET.deepScene).toBe(8000)
+    expect(CONTEXT_BUDGET.roughBefore).toBe(800)
+  })
+
   it('takes the tail within the budget but always keeps the last paragraph', () => {
     const chapter = rows(['一'.repeat(500), '二'.repeat(500), '三'.repeat(500)])
     expect(tailWithin(chapter, 1000).map((row) => row.order)).toEqual([2, 3])

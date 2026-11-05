@@ -144,6 +144,10 @@ describe('createLlmClient', () => {
     await client.chatJson([{ role: 'user', content: 'json' }], pingSchema, { reasoning: 'low' })
     expect(bodyOf(fetchMock, 0).reasoning).toEqual({ effort: 'none' })
     expect(bodyOf(fetchMock, 1).reasoning).toEqual({ effort: 'low' })
+    await client.chatJson([{ role: 'user', content: 'json' }], pingSchema, { reasoning: 'high' })
+    await client.chatJson([{ role: 'user', content: 'json' }], pingSchema, { reasoning: 'medium' })
+    expect(bodyOf(fetchMock, 2).reasoning).toEqual({ effort: 'high' })
+    expect(bodyOf(fetchMock, 3).reasoning).toEqual({ effort: 'medium' })
   })
 
   it('drops the reasoning field when the model insists on thinking', async () => {

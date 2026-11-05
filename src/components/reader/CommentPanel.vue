@@ -45,7 +45,7 @@
           @click="emit('retry')"
         />
 
-        <div v-if="threads.length > 0 || batchCount > 1" class="panel__tools">
+        <div class="panel__tools">
           <div v-if="batchCount > 1" class="panel__pager">
             <IconButton icon="arrow-left" label="上一批" :disabled="batchNo <= 1" @click="emit('batch', -1)" />
             <span>第 {{ batchNo }}/{{ batchCount }} 批</span>
@@ -60,6 +60,12 @@
             @click="emit('reroll')"
           >
             <span class="panel__reroll-text">换一批 · {{ rerollsLeft }}</span>
+          </IconButton>
+          <IconButton icon="info-o" label="查背景" variant="muted" @click="emit('background')">
+            <span class="panel__reroll-text">查背景</span>
+          </IconButton>
+          <IconButton icon="notes-o" label="深入聊聊" variant="muted" @click="emit('deep')">
+            <span class="panel__reroll-text">深入聊聊</span>
           </IconButton>
         </div>
         <p v-if="rerollMessage" class="panel__note">{{ rerollMessage }}</p>
@@ -162,6 +168,8 @@ const emit = defineEmits<{
   submit: [payload: { text: string; mention: string }]
   reroll: []
   batch: [offset: number]
+  background: []
+  deep: []
 }>()
 
 const draft = ref('')
@@ -270,8 +278,9 @@ onBeforeUnmount(() => {
 
 .panel__tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--rs-space-2);
   margin-top: var(--rs-space-2);
 }

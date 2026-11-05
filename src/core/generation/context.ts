@@ -8,7 +8,8 @@ export interface OrderedText {
 /** 各类任务给模型看的上下文上限（中文字数）。 */
 export const CONTEXT_BUDGET = {
   roughBefore: 800,
-  refineUntilHot: 2500,
+  refineUntilHot: 4000,
+  deepScene: 8000,
   replyBefore: 2000,
   chapterTalkFull: 12_000,
   promptEntities: 80,

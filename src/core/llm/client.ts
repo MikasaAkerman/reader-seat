@@ -123,7 +123,7 @@ function retryableStatus(status: number): boolean {
  */
 function reasoningField(baseUrl: string, mode: ReasoningMode): Record<string, unknown> | null {
   if (!/openrouter\.ai/i.test(baseUrl)) return null
-  return { effort: mode === 'low' ? 'low' : 'none' }
+  return { effort: mode === 'off' ? 'none' : mode }
 }
 
 export function estimateCost(usage: LlmUsage, pricing: Pricing): number {

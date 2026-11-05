@@ -10,19 +10,28 @@ import {
   resolvePredictions,
   snapshotForPrompt,
 } from '@/core/memory'
-import { briefLineup, fullLineup, pickRepliers } from '@/core/personas'
+import { briefLineup, fullLineup, pickRepliers, samplePassersby, voiceSamplesOf } from '@/core/personas'
 import { canReroll, latestBatch, nextBatchNo, rowsToCarry } from '@/core/comments/batches'
 import {
+  assignObservations,
   commentPasses,
   filterByEntityRule,
   formatBlock,
+  maxPicks,
+  runBackground,
   runChapterTalk,
+  runDeep,
+  runDeepPlan,
   runLiveReply,
+  runObserve,
   runPasserbyBatch,
   runRefine,
-  runRoughStream,
   runSpoilerCheck,
+  runVoice,
+  type AssignedSlot,
 } from '@/core/generation'
+import { stationLensOf } from '@/core/stations'
+import { addDropped, emptyDropped, isNearDuplicate, type DroppedCounts, type Passage } from '@/core/quality'
 import {
   CONTEXT_BUDGET,
   chapterDigest,
@@ -33,7 +42,6 @@ import {
   textBlockOf,
 } from '@/core/generation/context'
 import {
-  assignOne,
   blockIndex,
   BUFFER_LOW,
   BUFFER_TARGET,
@@ -44,37 +52,46 @@ import {
   planNextBlock,
   readyAhead,
   toTextBlock,
-  type AssignedParagraph,
 } from '@/core/generation/pipeline'
-import { pidToIndex, type RefineComment, type RoughParagraph } from '@/core/generation/schema'
+import { pidToIndex, type RefineComment } from '@/core/generation/schema'
 import { Scheduler } from '@/core/scheduler'
 import type { ReaderThread, StoredComment } from '@/db/repos/comments'
 import {
   appendComment,
   commentsInBatch,
   listBatches,
+  listDeepSpots,
+  listObservationsFor,
+  listRecentAngles,
+  listRecentCommentTexts,
   listThreads,
   markParagraph,
   markUserInterest,
   readMemory,
+  replaceObservations,
+  replacePinned,
+  saveDeepSpots,
   saveNextBatch,
   saveParagraphComments,
   tasteExamplesFor,
+  updateDeepSpot,
   updateMemory,
   writeGenerationLog,
   type MemoryState,
 } from '@/db/repos/comments'
+import { createId } from '@/db/id'
+import type { BookRow, ChapterRow, ChapterTalkRow, DeepSpotRow, ObservationRow, ParagraphRow } from '@/db/schema'
 import { getBook, listChapters, listParagraphs, saveChapterSummary } from '@/db/repos/library'
 import { addTalkReplies, readChapterTalk, saveChapterTalk, saveMicroReview } from '@/db/repos/notes'
-import { createId } from '@/db/id'
-import type { BookRow, ChapterRow, ChapterTalkRow, ParagraphRow } from '@/db/schema'
 import { useSettingsStore } from '@/stores/settings'
 import { useCommentsStore } from '@/stores/comments'
 
 /** 每章最多手动标几段"有意思" */
 export const INTEREST_LIMIT_PER_CHAPTER = 5
 
-type LogType = 'rough' | 'refine' | 'live' | 'chapterTalk' | 'spoilerCheck'
+type LogType = 'rough' | 'refine' | 'live' | 'chapterTalk' | 'spoilerCheck' | 'deep' | 'background'
+
+const DEEP_AHEAD = 40
 
 /** 任务入队时记下的位置。任务跑完时用户可能已经换了章、换了书。 */
 interface Place {
@@ -115,6 +132,15 @@ function commentFrom(comment: RefineComment): StoredComment {
     displayName: resident ? comment.reader_role || comment.display_name || '书友' : comment.display_name || '路人',
     role: comment.reader_role || '',
     text: comment.text,
+  }
+}
+
+function slotComment(slot: AssignedSlot, text: string): StoredComment {
+  return {
+    authorType: slot.authorType,
+    displayName: slot.displayName,
+    role: slot.readerRole,
+    text,
   }
 }
 
@@ -169,7 +195,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function forgetQueued() {
-    for (const id of scheduler.dropPending()) inflight.delete(id)
+    for (const id of scheduler.dropPending(['rough', 'refine', 'deep'])) inflight.delete(id)
   }
 
   function bind() {
@@ -250,6 +276,7 @@ export const useGenerationStore = defineStore('generation', () => {
     if (needsKey.value) return
     recoverRefining(paragraphs, place)
     ensure(paragraphs, input.order, place)
+    enqueueDeepWork(paragraphs, place, input.order)
   }
 
   function ensure(rows: ParagraphRow[], order: number, place: Place) {
@@ -325,9 +352,37 @@ export const useGenerationStore = defineStore('generation', () => {
     return priorSummaryFrom(chapters, order, synopsis)
   }
 
+  async function neighborChapterIds(place: Place): Promise<string[]> {
+    const chapters = await listChapters(place.bookId)
+    const current = chapters.find((chapter) => chapter.id === place.chapterId)
+    const previous = chapters.filter((chapter) => chapter.order < (current?.order ?? 0)).sort((a, b) => b.order - a.order)[0]
+    return [place.chapterId, previous?.id].filter((id): id is string => Boolean(id))
+  }
+
+  async function passageCorpus(place: Place, beforeOrder: number): Promise<Passage[]> {
+    const chapters = await listChapters(place.bookId)
+    const current = chapters.find((chapter) => chapter.id === place.chapterId)
+    const earlier = chapters.filter((chapter) => chapter.order < (current?.order ?? 0)).sort((a, b) => b.order - a.order).slice(0, 3)
+    const out: Passage[] = []
+    for (const chapter of earlier) {
+      const rows = await listParagraphs(chapter.id)
+      for (const row of rows) {
+        if (row.kind === 'heading' || !row.text.trim()) continue
+        out.push({ text: row.text, chapterTitle: chapter.title, score: 0 })
+      }
+    }
+    const here = await listParagraphs(place.chapterId)
+    for (const row of here) {
+      if (row.order >= beforeOrder || row.kind === 'heading' || !row.text.trim()) continue
+      out.push({ text: row.text, chapterTitle: current?.title, score: 0 })
+    }
+    return out
+  }
+
   async function runBlock(rows: ParagraphRow[], kind: 'rough' | 'live', place: Place, signal: AbortSignal) {
     const started = Date.now()
     const saved = new Set<string>()
+    const dropped = emptyDropped()
     try {
       if (rows.every((row) => row.kind === 'heading')) {
         for (const row of rows) await saveParagraphComments(row.id, [], 0, 'rough')
@@ -343,28 +398,14 @@ export const useGenerationStore = defineStore('generation', () => {
       const before = precedingText(chapterRows, rows[0]!.order, CONTEXT_BUDGET.roughBefore)
       const snapshot = snapshotForPrompt(memory.memory)
       const client = useSettingsStore().createClient()
-
-      const assigned = new Map<string, AssignedParagraph<ParagraphRow>>()
-      let hot = 0
-      let chain = Promise.resolve()
-      const accept = (paragraph: RoughParagraph) => {
-        const row = rowAt(rows, paragraph.pid)
-        if (!row || assigned.has(row.id)) return
-        const result = assignOne(row, paragraph, hot)
-        if (result.hot) hot += 1
-        assigned.set(row.id, result)
-        chain = chain.then(async () => {
-          if (signal.aborted) return
-          await saveParagraphComments(row.id, result.comments, result.score, result.genStatus)
-          saved.add(row.id)
-          inflight.delete(row.id)
-          touchPending()
-          if (result.hot) enqueueRefine(row, place, result.reason)
-          scheduleRefresh(place.chapterId)
-        })
-      }
-
-      const result = await runRoughStream(
+      const chapterIds = await neighborChapterIds(place)
+      const [recentAngles, recentComments, passages] = await Promise.all([
+        listRecentAngles(chapterIds),
+        listRecentCommentTexts(chapterIds),
+        passageCorpus(place, rows[0]!.order),
+      ])
+      const samples = voiceSamplesOf(lineup)
+      const observe = await runObserve(
         {
           title: book.title,
           author: book.author,
@@ -381,37 +422,104 @@ export const useGenerationStore = defineStore('generation', () => {
           ),
           tasteExamples: await tasteExamplesFor(book.id),
           lineupText: briefLineup(lineup),
+          recentAngles: recentAngles.join('；'),
+          maxPicks: maxPicks(rows.length),
+          paragraphCount: rows.length,
         },
-        block,
         client,
-        new Set(memory.entities),
-        accept,
         signal,
       )
+      if (signal.aborted) return
+      const assigned = assignObservations({
+        result: observe,
+        block,
+        lineup,
+        recentAngles,
+        passages,
+        seed: `${place.chapterId}:${rows[0]?.id ?? ''}`,
+        hotLimit: HOT_LIMIT,
+      })
+      Object.assign(dropped, assigned.dropped)
+      const observationRows: ObservationRow[] = assigned.slots.map((slot) => ({
+        id: createId(),
+        bookId: book.id,
+        chapterId: place.chapterId,
+        paragraphId: rowAt(rows, slot.pid)?.id ?? '',
+        oid: slot.oid,
+        kind: slot.kind,
+        quote: slot.quote,
+        point: slot.point,
+        echoText: slot.echoText,
+        assignedRole: slot.readerRole,
+        assignedName: slot.displayName,
+        authorType: slot.authorType,
+        createdAt: new Date().toISOString(),
+      }))
+      await replaceObservations(
+        rows.map((row) => row.id),
+        observationRows.filter((row) => row.paragraphId),
+      )
+
+      const byParagraph = new Map<string, StoredComment[]>()
+      let chain = Promise.resolve()
+      const flush = (row: ParagraphRow, comments: StoredComment[], score: number, hot: boolean) => {
+        chain = chain.then(async () => {
+          if (signal.aborted) return
+          await saveParagraphComments(row.id, comments, score, hot ? 'refining' : 'rough')
+          saved.add(row.id)
+          inflight.delete(row.id)
+          touchPending()
+          if (hot) enqueueRefine(row, place, score === 3 ? '观察步骤评为热段' : '粗评分为 3')
+          scheduleRefresh(place.chapterId)
+        })
+      }
+
+      const voice = await runVoice(
+        assigned.slots,
+        [...samples, ...recentComments].join('\n'),
+        client,
+        block,
+        new Set(memory.entities),
+        assigned.newEntities,
+        samples,
+        [...samples, ...recentComments],
+        (item) => {
+          const row = rowAt(rows, item.slot.pid)
+          if (!row) return
+          const list = byParagraph.get(row.id) ?? []
+          list.push(slotComment(item.slot, item.line.text))
+          byParagraph.set(row.id, list)
+          flush(row, list, item.slot.hot ? 3 : item.slot.score, item.slot.hot)
+        },
+        signal,
+      )
+      Object.assign(dropped, addDropped(dropped, voice.dropped))
       await chain
       if (signal.aborted) return
 
-      // 流式时每段只按当时已知的新实体过滤过。收齐后按完整实体表再看一遍，多删的才重写。
-      const statusNow = new Map((await listParagraphs(place.chapterId)).map((row) => [row.id, row.genStatus]))
-      for (const paragraph of result.paragraphs) {
-        const row = rowAt(rows, paragraph.pid)
-        const earlier = row ? assigned.get(row.id) : undefined
-        if (!row || !earlier || paragraph.comments.length >= earlier.comments.length) continue
-        if (statusNow.get(row.id) === 'refined') continue
-        const fixed = assignOne(row, paragraph, earlier.hot ? 0 : HOT_LIMIT)
-        await saveParagraphComments(row.id, fixed.comments, earlier.score, earlier.genStatus)
-      }
+      const hotSet = new Set(assigned.hotPids)
       for (const row of rows) {
-        if (!saved.has(row.id)) await saveParagraphComments(row.id, [], 0, 'rough')
+        if (saved.has(row.id)) continue
+        const slot = assigned.slots.find((item) => rowAt(rows, item.pid)?.id === row.id)
+        const hot = slot?.hot || (slot ? hotSet.has(slot.pid) : false)
+        await saveParagraphComments(row.id, [], hot ? 3 : 0, hot ? 'refining' : 'rough')
+        saved.add(row.id)
+        if (hot) enqueueRefine(row, place, '观察步骤评为热段')
       }
 
-      const hits = result.paragraphs.flatMap((item) => item.prediction_hits)
+      const hits = assigned.paragraphs.flatMap((item) => item.prediction_hits)
       await updateMemory(book.id, (state) => ({
         ...state,
         memory: { ...state.memory, predictions: resolvePredictions(state.memory.predictions, hits) },
-        entities: unionEntities(state.entities, result.new_entities),
+        entities: unionEntities(state.entities, assigned.newEntities),
       }))
-      await log(book.id, kind, true, result.usage, undefined, Date.now() - started)
+      const usage = {
+        promptTokens: observe.usage.promptTokens + voice.usage.promptTokens,
+        completionTokens: observe.usage.completionTokens + voice.usage.completionTokens,
+        cacheHitTokens: observe.usage.cacheHitTokens + voice.usage.cacheHitTokens,
+        reasoningTokens: observe.usage.reasoningTokens + voice.usage.reasoningTokens,
+      }
+      await log(book.id, kind === 'live' ? 'live' : 'rough', true, usage, undefined, Date.now() - started, { dropped })
     } catch (err) {
       if (isAbort(err) || signal.aborted) return
       for (const row of rows) {
@@ -424,6 +532,7 @@ export const useGenerationStore = defineStore('generation', () => {
       if (!signal.aborted && place.chapterId === currentChapterId) {
         const fresh = await listParagraphs(place.chapterId)
         ensure(fresh, lastOrder, place)
+        enqueueDeepWork(fresh, place, lastOrder)
         await refresh(place.chapterId)
       }
     }
@@ -469,6 +578,13 @@ export const useGenerationStore = defineStore('generation', () => {
         prior + snapshot,
       )
       const client = useSettingsStore().createClient()
+      const observations = await listObservationsFor(row.id)
+      const chapterIds = await neighborChapterIds(place)
+      const recentComments = await listRecentCommentTexts(chapterIds)
+      const samples = voiceSamplesOf(lineup)
+      const assignments = observations
+        .map((item) => `${item.assignedName} | ${item.kind} | ${item.point} | 引文：${item.quote}${item.echoText ? ` | 前文：${item.echoText}` : ''}`)
+        .join('\n')
       const result = await runRefine(
         {
           title: book.title,
@@ -481,11 +597,15 @@ export const useGenerationStore = defineStore('generation', () => {
           residentState: memory.memory.stances.map((item) => `${item.role}：${item.stance}`).join('；'),
           lineupText: fullLineup(lineup),
           tasteExamples: await tasteExamplesFor(book.id),
+          assignments,
+          recentComments: [...samples, ...recentComments].join('\n'),
         },
         block,
         client,
         new Set(memory.entities.filter((name) => !later.includes(name))),
         later,
+        observations.map((item) => item.quote),
+        [...samples, ...recentComments],
         signal,
       )
       if (signal.aborted) return
@@ -514,7 +634,7 @@ export const useGenerationStore = defineStore('generation', () => {
         ...state,
         memory: applyMemoryUpdates(state.memory, result.memory_updates),
       }))
-      await log(book.id, 'refine', true, result.usage, undefined, Date.now() - started)
+      await log(book.id, 'refine', true, result.usage, undefined, Date.now() - started, { dropped: result.dropped })
     } catch (err) {
       if (isAbort(err) || signal.aborted) return
       await markParagraph(paragraphId, 'failed')
@@ -661,8 +781,9 @@ export const useGenerationStore = defineStore('generation', () => {
         })),
       ])
       const replyTo = findComment(threads, request.parentId)
+      const lineup = lineupFor(book.spoilerLevel, book.lineup)
       const repliers = pickRepliers({
-        lineup: lineupFor(book.spoilerLevel, book.lineup),
+        lineup,
         spoken,
         mention: request.mention,
         replyTo: replyTo && replyTo.authorType !== 'user' ? replyTo : undefined,
@@ -701,6 +822,10 @@ export const useGenerationStore = defineStore('generation', () => {
         },
         signal,
         later,
+        [
+          ...voiceSamplesOf(lineup),
+          ...threads.flatMap((thread) => [thread.text, ...thread.replies.map((reply) => reply.text)]),
+        ],
       )
       await chain
       if (signal.aborted) return
@@ -822,7 +947,10 @@ export const useGenerationStore = defineStore('generation', () => {
     usage: LlmUsage,
     error?: string,
     latencyMs?: number,
+    extra: { dropped?: DroppedCounts; model?: string } = {},
   ) {
+    const settings = useSettingsStore()
+    const deep = type === 'deep'
     await writeGenerationLog({
       bookId,
       type,
@@ -831,14 +959,355 @@ export const useGenerationStore = defineStore('generation', () => {
       completionTokens: usage.completionTokens,
       cacheHitTokens: usage.cacheHitTokens,
       reasoningTokens: usage.reasoningTokens,
-      cost: estimateCost(usage, useSettingsStore().pricing),
+      cost: estimateCost(usage, deep ? settings.deepPricing : settings.pricing),
       error,
       latencyMs,
+      dropped: extra.dropped,
+      model: extra.model || (deep ? settings.deepModelName() : settings.model),
     })
   }
 
   async function loadTalk(chapterId: string) {
     chapterTalk.value = (await readChapterTalk(chapterId)) ?? null
+  }
+
+  function enqueueDeepWork(rows: ParagraphRow[], place: Place, order: number) {
+    const settings = useSettingsStore()
+    if (settings.deepPerChapter <= 0 || needsKey.value) return
+    scheduler.enqueue({
+      kind: 'deep',
+      key: `plan:${place.chapterId}`,
+      distance: 80,
+      run: (signal) => planDeep(rows, place, signal),
+    })
+    void listDeepSpots(place.chapterId).then((spots) => {
+      for (const spot of spots) {
+        if (spot.status !== 'planned') continue
+        if (spot.endOrder > order + DEEP_AHEAD) continue
+        scheduler.enqueue({
+          kind: 'deep',
+          key: spot.id,
+          distance: Math.max(0, spot.endOrder - order),
+          run: (signal) => generateDeep(spot.id, place, signal),
+        })
+      }
+    })
+  }
+
+  async function planDeep(rows: ParagraphRow[], place: Place, signal: AbortSignal) {
+    const existing = await listDeepSpots(place.chapterId)
+    if (existing.length > 0) return
+    const settings = useSettingsStore()
+    const maxSpots = settings.deepPerChapter
+    if (maxSpots <= 0) return
+    const started = Date.now()
+    try {
+      const book = await getBook(place.bookId)
+      if (!book || signal.aborted) return
+      const memory = await readMemory(book.id)
+      const chapters = await listChapters(place.bookId)
+      const chapter = chapters.find((item) => item.id === place.chapterId)
+      const client = settings.createClient()
+      const result = await runDeepPlan(
+        {
+          title: book.title,
+          spoilerLevel: book.spoilerLevel,
+          chapterTitle: chapter?.title || '',
+          synopsis: memory.synopsisThrough >= 0 && memory.synopsisThrough < (chapter?.order ?? 0) ? memory.synopsis : '',
+          priorSummary: await priorSummary(place, memory),
+          readText: chapterDigest(rows, CONTEXT_BUDGET.chapterTalkFull),
+          maxSpots,
+          stationLens: stationLensOf(book.station),
+        },
+        client,
+        signal,
+      )
+      if (signal.aborted) return
+      const sorted = [...rows].sort((a, b) => a.order - b.order)
+      const spots: DeepSpotRow[] = result.spots.flatMap((spot) => {
+        const start = rowAt(sorted, spot.start_pid)
+        const end = rowAt(sorted, spot.end_pid)
+        if (!end) return []
+        return [
+          {
+            id: createId(),
+            bookId: book.id,
+            chapterId: place.chapterId,
+            startParagraphId: start?.id ?? end.id,
+            endParagraphId: end.id,
+            startOrder: start?.order ?? end.order,
+            endOrder: end.order,
+            label: spot.label,
+            why: spot.why,
+            lens: spot.lens,
+            status: 'planned',
+            createdAt: new Date().toISOString(),
+          },
+        ]
+      })
+      await saveDeepSpots(spots)
+      await log(book.id, 'deep', true, result.usage, undefined, Date.now() - started, { model: settings.model })
+      enqueueDeepWork(rows, place, lastOrder)
+    } catch (err) {
+      if (isAbort(err) || signal.aborted) return
+      await log(place.bookId, 'deep', false, EMPTY_USAGE, errorText(err, '深读规划失败'), Date.now() - started)
+    }
+  }
+
+  async function generateDeep(spotId: string, place: Place, signal: AbortSignal, sceneEnd?: ParagraphRow) {
+    const started = Date.now()
+    const settings = useSettingsStore()
+    try {
+      const book = await getBook(place.bookId)
+      const spots = await listDeepSpots(place.chapterId)
+      const spot = spots.find((item) => item.id === spotId)
+      const rows = await listParagraphs(place.chapterId)
+      const end = sceneEnd ?? rows.find((row) => row.id === spot?.endParagraphId)
+      if (!book || !end) return
+      if (spot?.status === 'done' && !sceneEnd) return
+      const startOrder = spot?.startOrder ?? Math.max(1, end.order - 20)
+      const sceneRows = tailWithin(
+        rows.filter((row) => row.order >= startOrder && row.order <= end.order),
+        CONTEXT_BUDGET.deepScene,
+      )
+      const block = textBlockOf(sceneRows)
+      const memory = await readMemory(book.id)
+      const prior = await priorSummary(place, memory)
+      const snapshot = snapshotForPrompt(memory.memory)
+      const later = laterNames(
+        memory.entities,
+        rows.filter((row) => row.order <= end.order).map((row) => row.text).join(''),
+        rows.filter((row) => row.order > end.order).map((row) => row.text).join(''),
+        prior + snapshot,
+      )
+      const names = memory.entities.filter((name) => sceneRows.some((row) => row.text.includes(name))).slice(0, 3)
+      const passages = await passageCorpus(place, end.order)
+      const earlier = names
+        .flatMap((name) => passages.filter((passage) => passage.text.includes(name)).slice(0, 1))
+        .slice(0, 3)
+        .map((passage) => (passage.chapterTitle ? `《${passage.chapterTitle}》${passage.text}` : passage.text))
+        .join('\n')
+      const lineup = lineupFor(book.spoilerLevel, book.lineup)
+      const client = settings.createDeepClient()
+      const generated = await runDeep(
+        {
+          title: book.title,
+          spoilerLevel: book.spoilerLevel,
+          memorySnapshot: snapshot,
+          priorSummary: prior,
+          sceneText: formatBlock(block),
+          earlierPassages: earlier,
+          stationLens: stationLensOf(book.station),
+          label: spot?.label || '这一段',
+          why: spot?.why || '读者要求深入聊聊',
+          lens: spot?.lens || '',
+          lineupText: fullLineup(lineup),
+        },
+        block,
+        client,
+        new Set(memory.entities.filter((name) => !later.includes(name))),
+        later,
+        signal,
+        settings.deepReasoning,
+      )
+      if (signal.aborted) return
+      if (!generated.result) {
+        if (spot) await updateDeepSpot(spot.id, { status: 'failed' })
+        await log(book.id, 'deep', false, generated.usage, '长评未通过校验', Date.now() - started, {
+          dropped: generated.dropped,
+          model: settings.deepModelName(),
+        })
+        return
+      }
+      const data = generated.result
+      const thesisAuthor = lineup.find((persona) => persona.role === data.thesis.author) ?? lineup.find((persona) => persona.role === '课代表') ?? lineup[0]
+      const rebuttalAuthor =
+        lineup.find((persona) => persona.role === data.rebuttal?.author && persona.role !== thesisAuthor?.role) ??
+        lineup.find((persona) => persona.role === '毒舌') ??
+        lineup.find((persona) => persona.role !== thesisAuthor?.role)
+      const threads = [
+        {
+          authorType: 'resident' as const,
+          displayName: thesisAuthor?.displayName || data.thesis.author || '课代表',
+          role: thesisAuthor?.role || '课代表',
+          text: data.thesis.body,
+          kind: 'deep' as const,
+          title: data.thesis.title,
+          evidence: data.thesis.evidence,
+          background: data.background || undefined,
+          question: data.question || undefined,
+          replies: data.rebuttal?.body
+            ? [
+                {
+                  authorType: 'resident' as const,
+                  displayName: rebuttalAuthor?.displayName || data.rebuttal.author || '毒舌',
+                  role: rebuttalAuthor?.role || '毒舌',
+                  text: data.rebuttal.body,
+                  replyType: '反驳',
+                },
+              ]
+            : [],
+        },
+      ]
+      const checked = await withoutSpoilers(
+        book.id,
+        book.spoilerLevel,
+        prior,
+        formatBlock(block),
+        [{ root: { author_type: 'resident', text: threads[0]!.text, uses_outside_plot: false }, replies: threads[0]!.replies.map((reply) => ({ author_type: 'resident' as const, text: reply.text, uses_outside_plot: false })) }],
+        client,
+        signal,
+      )
+      if (signal.aborted) return
+      if (!checked || checked.length === 0) {
+        generated.dropped.spoiler += 1
+        if (spot) await updateDeepSpot(spot.id, { status: 'failed' })
+        await log(book.id, 'deep', false, generated.usage, '长评未过剧透校验', Date.now() - started, {
+          dropped: generated.dropped,
+          model: settings.deepModelName(),
+        })
+        return
+      }
+      await replacePinned(end.id, 'deep', threads)
+      if (spot) await updateDeepSpot(spot.id, { status: 'done' })
+      await log(book.id, 'deep', true, generated.usage, undefined, Date.now() - started, {
+        dropped: generated.dropped,
+        model: settings.deepModelName(),
+      })
+      if (place.chapterId === currentChapterId) await refresh(place.chapterId)
+    } catch (err) {
+      if (isAbort(err) || signal.aborted) return
+      await log(place.bookId, 'deep', false, EMPTY_USAGE, errorText(err, '深读长评失败'), Date.now() - started, {
+        model: settings.deepModelName(),
+      })
+    }
+  }
+
+  async function requestDeep(paragraphId: string) {
+    notice.value = ''
+    const place = here()
+    if (needsKey.value) {
+      notice.value = '先去设置里填写 API Key'
+      return
+    }
+    const rows = await listParagraphs(place.chapterId)
+    const row = rows.find((item) => item.id === paragraphId)
+    if (!row) return
+    const scene = tailWithin(
+      rows.filter((item) => item.order <= row.order),
+      CONTEXT_BUDGET.deepScene,
+    )
+    const start = scene[0] ?? row
+    const spot: DeepSpotRow = {
+      id: createId(),
+      bookId: place.bookId,
+      chapterId: place.chapterId,
+      startParagraphId: start.id,
+      endParagraphId: row.id,
+      startOrder: start.order,
+      endOrder: row.order,
+      label: '深入聊聊',
+      why: '读者要求深入聊聊',
+      lens: '',
+      status: 'planned',
+      createdAt: new Date().toISOString(),
+    }
+    await saveDeepSpots([spot])
+    scheduler.enqueue({
+      kind: 'deep',
+      key: spot.id,
+      distance: 0,
+      run: (signal) => generateDeep(spot.id, place, signal, row),
+    })
+    notice.value = '开始写长评'
+  }
+
+  async function fetchBackground(paragraphId: string) {
+    notice.value = ''
+    const place = here()
+    if (needsKey.value) {
+      notice.value = '先去设置里填写 API Key'
+      return
+    }
+    const controller = new AbortController()
+    sideCalls.add(controller)
+    const started = Date.now()
+    try {
+      const book = await getBook(place.bookId)
+      const rows = await listParagraphs(place.chapterId)
+      const row = rows.find((item) => item.id === paragraphId)
+      if (!book || !row) return
+      const upTo = rows.filter((item) => item.order <= row.order)
+      const block = textBlockOf(tailWithin(upTo, CONTEXT_BUDGET.replyBefore))
+      const memory = await readMemory(book.id)
+      const prior = await priorSummary(place, memory)
+      const later = laterNames(
+        memory.entities,
+        upTo.map((item) => item.text).join(''),
+        rows.filter((item) => item.order > row.order).map((item) => item.text).join(''),
+        prior,
+      )
+      const client = useSettingsStore().createClient()
+      const generated = await runBackground(
+        {
+          title: book.title,
+          spoilerLevel: book.spoilerLevel,
+          priorSummary: prior,
+          textUntilHere: formatBlock(block),
+          pid: `p${block.paragraphs.length}`,
+        },
+        block,
+        client,
+        new Set(memory.entities.filter((name) => !later.includes(name))),
+        later,
+        controller.signal,
+      )
+      if (controller.signal.aborted) return
+      if (!generated.result) {
+        notice.value = '这条背景没能通过校验'
+        await log(book.id, 'background', false, generated.usage, '背景未通过校验', Date.now() - started, {
+          dropped: generated.dropped,
+        })
+        return
+      }
+      const passing = await passingIndexes(
+        book.id,
+        book.spoilerLevel,
+        prior,
+        formatBlock(block),
+        [generated.result.text],
+        client,
+        controller.signal,
+      )
+      if (controller.signal.aborted) return
+      if (!passing.has(0)) {
+        generated.dropped.spoiler += 1
+        notice.value = '这条背景没能通过校验'
+        await log(book.id, 'background', false, generated.usage, '背景未过剧透校验', Date.now() - started, {
+          dropped: generated.dropped,
+        })
+        return
+      }
+      await replacePinned(row.id, 'background', [
+        {
+          authorType: 'resident',
+          displayName: '考据',
+          role: '考据癖',
+          text: generated.result.text,
+          kind: 'background',
+        },
+      ])
+      await log(book.id, 'background', true, generated.usage, undefined, Date.now() - started, {
+        dropped: generated.dropped,
+      })
+      await refresh(place.chapterId)
+    } catch (err) {
+      if (isAbort(err) || controller.signal.aborted) return
+      notice.value = '没查到背景'
+      await log(place.bookId, 'background', false, EMPTY_USAGE, errorText(err, '查背景失败'), Date.now() - started)
+    } finally {
+      sideCalls.delete(controller)
+    }
   }
 
   async function markInteresting(paragraphId: string) {
@@ -880,6 +1349,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const started = Date.now()
     try {
       const client = useSettingsStore().createClient()
+      const profiles = samplePassersby(`${paragraph.anchor}:${batches.length}`, 3)
       const result = await runPasserbyBatch(
         {
           text: paragraph.text,
@@ -887,6 +1357,7 @@ export const useGenerationStore = defineStore('generation', () => {
             .filter((row) => !row.parentId)
             .map((row) => `${row.displayName}：${row.text}`)
             .join('\n'),
+          names: profiles.map((person) => person.displayName).join('、'),
         },
         client,
         controller.signal,
@@ -911,7 +1382,10 @@ export const useGenerationStore = defineStore('generation', () => {
           later,
         ).map((comment) => comment.text),
       )
-      const candidates = result.comments.filter((comment) => allowed.has(comment.text))
+      const existing = carried.map((row) => row.text)
+      const candidates = result.comments.filter(
+        (comment) => allowed.has(comment.text) && !isNearDuplicate(comment.text, existing),
+      )
       const passing = await passingIndexes(
         book.id,
         book.spoilerLevel,
@@ -929,13 +1403,13 @@ export const useGenerationStore = defineStore('generation', () => {
         return
       }
       let seq = carried.reduce((max, row) => Math.max(max, row.seq ?? 0), -1) + 1
-      const passers = fresh.map((comment) => ({
+      const passers = fresh.map((comment, index) => ({
         id: createId(),
         batchId: '',
         paragraphId,
         parentId: '',
         authorType: 'passerby' as const,
-        displayName: comment.display_name || '路人',
+        displayName: profiles[index]?.displayName || comment.display_name || '路人',
         role: '',
         text: comment.text,
         seq: seq++,
@@ -975,7 +1449,7 @@ export const useGenerationStore = defineStore('generation', () => {
           authorType: 'resident',
           role: extra.role,
           displayName: extra.displayName,
-          voice: extra.voiceSamples[0] ?? '',
+          voice: extra.voice,
         })
       }
       const rows = await listParagraphs(place.chapterId)
@@ -1059,6 +1533,8 @@ export const useGenerationStore = defineStore('generation', () => {
     loadTalk,
     markInteresting,
     reroll,
+    requestDeep,
+    fetchBackground,
     submitMicro,
   }
 })

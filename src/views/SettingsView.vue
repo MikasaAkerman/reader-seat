@@ -16,9 +16,25 @@
         </VanCell>
       </VanCellGroup>
 
+      <VanCellGroup inset title="深度任务模型">
+        <VanField v-model="deepBaseUrl" label="接口地址" placeholder="留空则沿用主模型" />
+        <VanField v-model="deepModel" label="模型名" placeholder="留空则沿用主模型" />
+        <VanField v-model="deepApiKey" label="API Key" type="password" placeholder="留空则沿用主模型" />
+        <VanField v-model="deepReasoning" label="推理档位" placeholder="low / medium / high" />
+        <VanField v-model.number="deepPerChapter" type="number" label="每章长评" placeholder="0、1 或 2" />
+        <VanField v-model.number="deepPricing.inputHitPerMTok" type="number" label="深度输入命中" />
+        <VanField v-model.number="deepPricing.inputMissPerMTok" type="number" label="深度输入未命中" />
+        <VanField v-model.number="deepPricing.outputPerMTok" type="number" label="深度输出" />
+      </VanCellGroup>
+
       <div class="settings__actions">
         <VanButton type="primary" round :loading="saving" @click="onSave">保存</VanButton>
         <VanButton round plain type="primary" icon="exchange" :loading="testing" @click="onTest">测试连接</VanButton>
+      </div>
+      <div class="settings__actions">
+        <VanButton round plain type="primary" icon="exchange" :loading="testingDeep" @click="onTestDeep">
+          测试深度模型
+        </VanButton>
       </div>
       <div v-if="testResult" class="settings__test" role="status">
         <VanTag :type="testResult.jsonOk ? 'success' : 'danger'" plain round>
@@ -54,6 +70,22 @@
                 </div>
                 <span>{{ money(book.cost) }}</span>
               </div>
+              <template v-if="quality">
+                <h3 class="settings__sub">质量</h3>
+                <p class="settings__unit">
+                  丢弃率 {{ Math.round(quality.dropRate * 100) }}% · 多样度 {{ quality.diversity.toFixed(2) }} · 引文
+                  {{ quality.dropped.quote }} · 重复 {{ quality.dropped.duplicate }} · 实体
+                  {{ quality.dropped.entity }} · 外部 {{ quality.dropped.outside }} · 剧透
+                  {{ quality.dropped.spoiler }}
+                </p>
+                <div v-for="row in quality.byModel" :key="row.model" class="settings__row">
+                  <div>
+                    <strong>{{ row.model }}</strong>
+                    <small>{{ row.calls }} 次</small>
+                  </div>
+                  <span>{{ money(row.cost) }}</span>
+                </div>
+              </template>
               <h3 class="settings__sub">按日期</h3>
               <div v-for="day in costDays" :key="day.day" class="settings__row">
                 <div>
@@ -95,8 +127,9 @@ import {
   showToast,
 } from 'vant'
 import InfoTip from '@/components/common/InfoTip.vue'
-import { summarizeCosts, type CostBook, type CostDay } from '@/core/cost/summary'
+import { summarizeCosts, summarizeQuality, type CostBook, type CostDay, type QualitySummary } from '@/core/cost/summary'
 import { exportBackup, restoreBackup } from '@/db/repos/backup'
+import { listCommentsForDiversity } from '@/db/repos/comments'
 import { listBookCards, listGenerationLogs } from '@/db/repos/library'
 import { platform } from '@/platform'
 import type { Pricing } from '@/core/llm'
@@ -110,13 +143,21 @@ const model = ref('')
 const apiKey = ref('')
 const chapterReasoning = ref(true)
 const pricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
+const deepBaseUrl = ref('')
+const deepModel = ref('')
+const deepApiKey = ref('')
+const deepReasoning = ref('high')
+const deepPerChapter = ref(1)
+const deepPricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
 const saving = ref(false)
 const testing = ref(false)
+const testingDeep = ref(false)
 const testResult = ref<{ jsonOk: boolean; streamOk: boolean; detail?: string } | null>(null)
 const expanded = ref<string[]>([])
 const backupInput = ref<HTMLInputElement | null>(null)
 const costBooks = ref<CostBook[]>([])
 const costDays = ref<CostDay[]>([])
+const quality = ref<QualitySummary | null>(null)
 
 const totalLabel = computed(() => {
   if (costBooks.value.length === 0) return '暂无'
@@ -137,11 +178,21 @@ onMounted(async () => {
   apiKey.value = settings.apiKey
   chapterReasoning.value = settings.chapterReasoning
   pricing.value = { ...settings.pricing }
+  deepBaseUrl.value = settings.deepBaseUrl
+  deepModel.value = settings.deepModel
+  deepApiKey.value = settings.deepApiKey
+  deepReasoning.value = settings.deepReasoning
+  deepPerChapter.value = settings.deepPerChapter
+  deepPricing.value = { ...settings.deepPricing }
   const [logs, cards] = await Promise.all([listGenerationLogs(), listBookCards()])
   const titles = Object.fromEntries(cards.map((card) => [card.id, card.title]))
   const summary = summarizeCosts(logs, titles)
   costBooks.value = summary.books
   costDays.value = summary.days
+  const firstBook = summary.books[0]?.bookId
+  const comments = firstBook ? await listCommentsForDiversity(firstBook) : []
+  const bookLogs = firstBook ? logs.filter((log) => log.bookId === firstBook) : logs
+  quality.value = summarizeQuality(bookLogs, comments)
 })
 
 function goBack() {
@@ -164,6 +215,7 @@ function usePreset(name: keyof typeof PRICING_PRESETS) {
 }
 
 function formInput() {
+  const per = Number(deepPerChapter.value)
   return {
     baseUrl: baseUrl.value.trim(),
     model: model.value.trim(),
@@ -173,6 +225,16 @@ function formInput() {
       inputHitPerMTok: Number(pricing.value.inputHitPerMTok) || 0,
       inputMissPerMTok: Number(pricing.value.inputMissPerMTok) || 0,
       outputPerMTok: Number(pricing.value.outputPerMTok) || 0,
+    },
+    deepBaseUrl: deepBaseUrl.value.trim(),
+    deepModel: deepModel.value.trim(),
+    deepApiKey: deepApiKey.value.trim(),
+    deepReasoning: deepReasoning.value.trim() as 'low' | 'medium' | 'high',
+    deepPerChapter: per === 0 || per === 2 ? per : 1,
+    deepPricing: {
+      inputHitPerMTok: Number(deepPricing.value.inputHitPerMTok) || 0,
+      inputMissPerMTok: Number(deepPricing.value.inputMissPerMTok) || 0,
+      outputPerMTok: Number(deepPricing.value.outputPerMTok) || 0,
     },
   }
 }
@@ -244,6 +306,24 @@ async function onTest() {
     showToast(message)
   } finally {
     testing.value = false
+  }
+}
+
+async function onTestDeep() {
+  testingDeep.value = true
+  testResult.value = null
+  try {
+    await settings.save(formInput())
+    const result = await settings.testDeepConnection()
+    testResult.value = { jsonOk: result.jsonOk, streamOk: result.streamOk, detail: `深度模型 ${result.detail}` }
+    if (result.jsonOk && result.streamOk) showSuccessToast('深度模型连通性测试通过')
+    else showFailToast('深度模型连通性测试未完全通过')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '测试失败'
+    testResult.value = { jsonOk: false, streamOk: false, detail: message }
+    showToast(message)
+  } finally {
+    testingDeep.value = false
   }
 }
 </script>

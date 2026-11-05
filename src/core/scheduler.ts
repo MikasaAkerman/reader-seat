@@ -1,4 +1,4 @@
-export type TaskKind = 'live' | 'rough' | 'refine' | 'chapterTalk'
+export type TaskKind = 'live' | 'rough' | 'refine' | 'deep' | 'chapterTalk'
 
 export interface SchedulerTask {
   kind: TaskKind
@@ -9,8 +9,9 @@ export interface SchedulerTask {
   droppable?: boolean
 }
 
-const PRIORITY: Record<TaskKind, number> = { live: 0, rough: 1, refine: 2, chapterTalk: 3 }
-const DEFAULT_LIMIT: Record<TaskKind, number> = { live: 1, rough: 1, refine: 2, chapterTalk: 1 }
+const PRIORITY: Record<TaskKind, number> = { live: 0, rough: 1, refine: 2, deep: 3, chapterTalk: 4 }
+const DEFAULT_LIMIT: Record<TaskKind, number> = { live: 1, rough: 1, refine: 2, deep: 1, chapterTalk: 1 }
+const KINDS: TaskKind[] = ['live', 'rough', 'refine', 'deep', 'chapterTalk']
 
 interface Queued extends SchedulerTask {
   id: string
@@ -60,9 +61,9 @@ export class Scheduler {
     this.schedule()
   }
 
-  /** 清掉还没开始的粗生成、精修和可丢弃任务，返回这些任务对应的段落 id。正在跑的不中止。 */
-  dropPending(kinds: Array<'rough' | 'refine'> = ['rough', 'refine']): string[] {
-    const drop = (task: Queued) => task.droppable === true || kinds.includes(task.kind as 'rough' | 'refine')
+  /** 清掉还没开始的粗生成、精修、深读和可丢弃任务，返回这些任务对应的段落 id。正在跑的不中止。 */
+  dropPending(kinds: Array<'rough' | 'refine' | 'deep'> = ['rough', 'refine']): string[] {
+    const drop = (task: Queued) => task.droppable === true || kinds.includes(task.kind as 'rough' | 'refine' | 'deep')
     const dropped = this.queued.filter(drop)
     this.queued = this.queued.filter((task) => !drop(task))
     return dropped.flatMap((task) => task.key.split(','))
@@ -93,7 +94,7 @@ export class Scheduler {
 
   private dispatch(): void {
     if (this.paused) return
-    for (const kind of ['live', 'rough', 'refine', 'chapterTalk'] as const) {
+    for (const kind of KINDS) {
       let active = [...this.running.keys()].filter((id) => id.startsWith(`${kind}:`)).length
       while (active < this.limit[kind]) {
         const index = this.queued.findIndex((task) => task.kind === kind)

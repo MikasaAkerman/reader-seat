@@ -255,4 +255,28 @@ describe('scheduler', () => {
     expect(signal?.aborted).toBe(true)
     expect(scheduler.pendingCount).toBe(0)
   })
+
+  it('drops queued deep work when jumping, but not a running task', async () => {
+    const scheduler = new Scheduler()
+    const running = held()
+    scheduler.enqueue({
+      kind: 'deep',
+      key: 'running',
+      distance: 0,
+      run: async () => {
+        await running.promise
+      },
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    scheduler.enqueue({
+      kind: 'deep',
+      key: 'waiting',
+      distance: 4,
+      run: async () => {},
+    })
+    expect(scheduler.dropPending(['rough', 'refine', 'deep'])).toEqual(['waiting'])
+    expect(scheduler.pendingCount).toBe(0)
+    running.release()
+    await vi.runAllTimersAsync()
+  })
 })

@@ -6,6 +6,7 @@ import type { UnlockMode } from '@/core/types'
 import {
   bubbleFor,
   commentCounts,
+  deepParagraphIds,
   listBatches,
   listThreads,
   setCommentMark,
@@ -43,14 +44,18 @@ export const useCommentsStore = defineStore('comments', () => {
     const ids = rows.map((row) => row.id)
     const own = bookId ? await ownParagraphIds(bookId, chapterId, ids) : new Set<string>()
     chapterLocked.value = commentsHidden(unlockMode, chapterDone, own.has(`micro:${chapterId}`))
-    const counts = await commentCounts(ids)
+    const [counts, deep] = await Promise.all([commentCounts(ids), deepParagraphIds(ids)])
     const next: Record<string, BubbleState> = {}
     if (!chapterLocked.value) {
       for (const row of rows) {
         const bubble = bubbleFor(row.genStatus, row.score, counts[row.id] ?? 0, pending.has(row.id))
         if (!bubble) continue
         const locked = paragraphLocked(unlockMode, own.has(row.id))
-        next[row.id] = locked ? { ...bubble, locked: true } : bubble
+        next[row.id] = {
+          ...bubble,
+          deep: deep.has(row.id),
+          ...(locked ? { locked: true } : {}),
+        }
       }
     }
     bubbles.value = next

@@ -97,6 +97,29 @@ describe('comment batches', () => {
         text: '最上',
       },
       {
+        id: 'e',
+        batchId: '',
+        paragraphId: 'p1',
+        parentId: '',
+        authorType: 'resident',
+        displayName: '课代表',
+        role: '课代表',
+        text: '长评正文',
+        kind: 'deep',
+        title: '一句话论点',
+      },
+      {
+        id: 'f',
+        batchId: '',
+        paragraphId: 'p1',
+        parentId: '',
+        authorType: 'resident',
+        displayName: '考据',
+        role: '考据癖',
+        text: '背景一条',
+        kind: 'background',
+      },
+      {
         id: 'd',
         batchId: 'b',
         paragraphId: 'p1',
@@ -110,6 +133,8 @@ describe('comment batches', () => {
     ]
     expect(threadsFrom(comments.filter((comment) => !comment.spoiler)).map((thread) => thread.displayName)).toEqual([
       '我',
+      '课代表',
+      '考据',
       '考据癖',
       '路人',
     ])

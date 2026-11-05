@@ -144,6 +144,12 @@ describe('bubbleFor', () => {
     expect(bubbleFor('failed', 2, 3, false)).toMatchObject({ count: 3, failed: false })
     expect(bubbleFor('rough', 0, 0, false)).toBeNull()
     expect(bubbleFor('none', null, 0, true)).toMatchObject({ pending: true })
-    expect(bubbleFor('refined', 3, 4, false)).toEqual({ count: 4, hot: true, pending: false, failed: false })
+    expect(bubbleFor('refined', 3, 4, false)).toEqual({
+      count: 4,
+      hot: true,
+      pending: false,
+      failed: false,
+      deep: false,
+    })
   })
 })

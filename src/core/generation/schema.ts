@@ -58,6 +58,7 @@ export const refineCommentSchema = z.object({
   reader_role: z.string().optional(),
   display_name: z.string().optional(),
   text: z.string(),
+  quote: z.string().optional(),
   uses_outside_plot: z.boolean().default(false),
   reply_type: z.string().optional(),
 })
@@ -114,6 +115,80 @@ export const refineResultSchema = z.object({
     resident_stance_changes: [],
     scenes: [],
   }),
+})
+
+const observationKindSchema = z.enum(['动机', '细节', '修辞', '疑问', '呼应', '结构', '矛盾', '伏笔'])
+
+export const observationSchema = z.object({
+  oid: z.string(),
+  kind: observationKindSchema,
+  quote: z.string(),
+  point: z.string(),
+  echo_query: z.string().optional(),
+})
+
+export const observeParagraphSchema = z.object({
+  pid: z.string(),
+  score: scoreSchema,
+  observations: z.array(observationSchema).default([]),
+  prediction_hits: z.array(predictionHitSchema).default([]),
+})
+
+export const observeResultSchema = z.object({
+  paragraphs: z.array(observeParagraphSchema),
+  hot_pids: z.array(z.string()).default([]),
+  new_entities: z.array(z.string()).default([]),
+})
+
+export const voiceLineSchema = z.object({
+  cid: z.string(),
+  text: z.string(),
+  quote: z.string().default(''),
+  uses_outside_plot: z.boolean().default(false),
+})
+
+export const evidenceSchema = z.object({
+  pid: z.string(),
+  quote: z.string(),
+})
+
+const deepAuthorSchema = z.object({
+  author: z.string().default('课代表'),
+  title: z.string().optional(),
+  body: z.string().default(''),
+  evidence: z.array(evidenceSchema).default([]),
+  reservation: z.string().optional(),
+})
+
+export const deepResultSchema = z.object({
+  thesis: deepAuthorSchema,
+  rebuttal: deepAuthorSchema.optional(),
+  background: z
+    .unknown()
+    .optional()
+    .transform((value) => (typeof value === 'string' ? value : '')),
+  question: z
+    .unknown()
+    .optional()
+    .transform((value) => (typeof value === 'string' ? value : '')),
+})
+
+export const deepSpotSchema = z.object({
+  start_pid: z.string(),
+  end_pid: z.string(),
+  label: z.string().default(''),
+  why: z.string().default(''),
+  lens: z.string().default(''),
+})
+
+export const deepPlanSchema = z.object({
+  spots: z.array(deepSpotSchema).default([]),
+})
+
+export const backgroundResultSchema = z.object({
+  text: z.string().default(''),
+  quote: z.string().default(''),
+  uses_outside_plot: z.boolean().default(false),
 })
 
 export type RoughComment = z.infer<typeof roughCommentSchema>
@@ -187,6 +262,14 @@ export const chapterTalkResultSchema = z.object({
 })
 
 export type LiveReply = z.infer<typeof liveReplySchema>
+export type ObservationDraft = z.infer<typeof observationSchema>
+export type ObserveParagraph = z.infer<typeof observeParagraphSchema>
+export type ObserveResult = z.infer<typeof observeResultSchema>
+export type VoiceLine = z.infer<typeof voiceLineSchema>
+export type DeepResult = z.infer<typeof deepResultSchema>
+export type DeepPlan = z.infer<typeof deepPlanSchema>
+export type DeepSpotDraft = z.infer<typeof deepSpotSchema>
+export type BackgroundResult = z.infer<typeof backgroundResultSchema>
 export type ChapterTalkResult = z.infer<typeof chapterTalkResultSchema>
 
 export function pidToIndex(pid: string): number {

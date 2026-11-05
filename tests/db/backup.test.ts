@@ -23,6 +23,34 @@ describe('backup repo', () => {
       updatedAt: '2026-11-04T00:00:00.000Z',
     })
     await db.bookFiles.add({ bookId: 'book', bytes: new Uint8Array([1]) })
+    await db.observations.add({
+      id: 'obs1',
+      bookId: 'book',
+      chapterId: 'c1',
+      paragraphId: 'p1',
+      oid: 'o1',
+      kind: '矛盾',
+      quote: '天还没亮',
+      point: '天亮之前就有事',
+      assignedRole: '毒舌',
+      assignedName: '毒舌',
+      authorType: 'resident',
+      createdAt: '2026-11-05T00:00:00.000Z',
+    })
+    await db.deepSpots.add({
+      id: 'spot1',
+      bookId: 'book',
+      chapterId: 'c1',
+      startParagraphId: 'p1',
+      endParagraphId: 'p2',
+      startOrder: 1,
+      endOrder: 2,
+      label: '出门',
+      why: '转折',
+      lens: '细节',
+      status: 'planned',
+      createdAt: '2026-11-05T00:00:00.000Z',
+    })
     await db.settings.bulkAdd([
       { key: 'llm.model', value: 'demo' },
       { key: 'secret:apiKey', value: 'hidden' },
@@ -37,6 +65,8 @@ describe('backup repo', () => {
     await restoreBackup(json)
 
     expect(await db.books.get('book')).toMatchObject({ title: '巷口', fileMissing: false })
+    expect(await db.observations.get('obs1')).toMatchObject({ point: '天亮之前就有事' })
+    expect(await db.deepSpots.get('spot1')).toMatchObject({ label: '出门', status: 'planned' })
     expect(await db.bookFiles.get('book')).toBeTruthy()
     expect(await db.settings.get('llm.model')).toMatchObject({ value: 'demo' })
     expect(await db.settings.get('secret:apiKey')).toMatchObject({ value: 'hidden' })

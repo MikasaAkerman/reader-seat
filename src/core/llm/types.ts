@@ -22,8 +22,8 @@ export interface LlmUsage {
   reasoningTokens: number
 }
 
-/** off：明确关掉思考（服务商支持时）；low：允许少量思考。 */
-export type ReasoningMode = 'off' | 'low'
+/** off：明确关掉思考（服务商支持时）；其余为 OpenRouter effort。 */
+export type ReasoningMode = 'off' | 'low' | 'medium' | 'high'
 
 export interface CallOptions {
   temperature?: number

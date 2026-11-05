@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { z } from 'zod'
-import { createLlmClient, type Pricing } from '@/core/llm'
+import { createLlmClient, type Pricing, type ReasoningMode } from '@/core/llm'
 import { getSetting, setSetting } from '@/db/repos/settings'
 import { platform } from '@/platform'
 
@@ -30,6 +30,7 @@ export const PRICING_PRESETS: Record<'deepseek' | 'free', Pricing> = {
 const DEFAULT_BASE_URL = 'https://api.deepseek.com'
 const DEFAULT_MODEL = 'deepseek-chat'
 const API_KEY_SECRET = 'apiKey'
+const DEEP_API_KEY_SECRET = 'deepApiKey'
 
 const pingSchema = z.object({
   ok: z.literal(true),
@@ -47,9 +48,27 @@ function validPricing(value: unknown): Pricing | null {
   }
 }
 
+function validReasoning(value: unknown): ReasoningMode {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'high'
+}
+
 export function defaultPricingFor(baseUrl: string, model: string): Pricing {
   if (/openrouter\.ai/i.test(baseUrl) && /free/i.test(model)) return { ...PRICING_PRESETS.free }
   return { ...PRICING_PRESETS.deepseek }
+}
+
+export interface SettingsInput {
+  baseUrl: string
+  model: string
+  apiKey: string
+  chapterReasoning?: boolean
+  pricing?: Pricing
+  deepBaseUrl?: string
+  deepModel?: string
+  deepApiKey?: string
+  deepReasoning?: ReasoningMode
+  deepPerChapter?: number
+  deepPricing?: Pricing
 }
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -58,6 +77,12 @@ export const useSettingsStore = defineStore('settings', () => {
   const apiKey = ref('')
   const chapterReasoning = ref(true)
   const pricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
+  const deepBaseUrl = ref('')
+  const deepModel = ref('')
+  const deepApiKey = ref('')
+  const deepReasoning = ref<ReasoningMode>('high')
+  const deepPerChapter = ref(1)
+  const deepPricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
   const loaded = ref(false)
   const display = ref<ReaderDisplay>({ ...DEFAULT_DISPLAY })
 
@@ -88,39 +113,69 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function load() {
-    const [savedBase, savedModel, savedKey, savedReasoning, savedPricing] = await Promise.all([
+    const [
+      savedBase,
+      savedModel,
+      savedKey,
+      savedReasoning,
+      savedPricing,
+      savedDeepBase,
+      savedDeepModel,
+      savedDeepKey,
+      savedDeepReasoning,
+      savedDeepPer,
+      savedDeepPricing,
+    ] = await Promise.all([
       getSetting<string>('llm.baseUrl'),
       getSetting<string>('llm.model'),
       platform.getSecret(API_KEY_SECRET),
       getSetting<boolean>('llm.chapterReasoning'),
       getSetting<unknown>('llm.pricing'),
+      getSetting<string>('llm.deepBaseUrl'),
+      getSetting<string>('llm.deepModel'),
+      platform.getSecret(DEEP_API_KEY_SECRET),
+      getSetting<string>('llm.deepReasoning'),
+      getSetting<number>('llm.deepPerChapter'),
+      getSetting<unknown>('llm.deepPricing'),
     ])
     baseUrl.value = savedBase || DEFAULT_BASE_URL
     model.value = savedModel || DEFAULT_MODEL
     apiKey.value = savedKey || ''
     chapterReasoning.value = savedReasoning !== false
     pricing.value = validPricing(savedPricing) ?? defaultPricingFor(baseUrl.value, model.value)
+    deepBaseUrl.value = savedDeepBase || ''
+    deepModel.value = savedDeepModel || ''
+    deepApiKey.value = savedDeepKey || ''
+    deepReasoning.value = validReasoning(savedDeepReasoning)
+    deepPerChapter.value = savedDeepPer === 0 || savedDeepPer === 2 ? savedDeepPer : 1
+    deepPricing.value = validPricing(savedDeepPricing) ?? { ...pricing.value }
     loaded.value = true
   }
 
-  async function save(input: {
-    baseUrl: string
-    model: string
-    apiKey: string
-    chapterReasoning?: boolean
-    pricing?: Pricing
-  }) {
+  async function save(input: SettingsInput) {
     baseUrl.value = input.baseUrl || DEFAULT_BASE_URL
     model.value = input.model || DEFAULT_MODEL
     apiKey.value = input.apiKey
     if (input.chapterReasoning !== undefined) chapterReasoning.value = input.chapterReasoning
     if (input.pricing) pricing.value = validPricing(input.pricing) ?? pricing.value
+    if (input.deepBaseUrl !== undefined) deepBaseUrl.value = input.deepBaseUrl
+    if (input.deepModel !== undefined) deepModel.value = input.deepModel
+    if (input.deepApiKey !== undefined) deepApiKey.value = input.deepApiKey
+    if (input.deepReasoning !== undefined) deepReasoning.value = validReasoning(input.deepReasoning)
+    if (input.deepPerChapter !== undefined) deepPerChapter.value = input.deepPerChapter
+    if (input.deepPricing) deepPricing.value = validPricing(input.deepPricing) ?? deepPricing.value
     await Promise.all([
       setSetting('llm.baseUrl', baseUrl.value),
       setSetting('llm.model', model.value),
       setSetting('llm.chapterReasoning', chapterReasoning.value),
       setSetting('llm.pricing', { ...pricing.value }),
+      setSetting('llm.deepBaseUrl', deepBaseUrl.value),
+      setSetting('llm.deepModel', deepModel.value),
+      setSetting('llm.deepReasoning', deepReasoning.value),
+      setSetting('llm.deepPerChapter', deepPerChapter.value),
+      setSetting('llm.deepPricing', { ...deepPricing.value }),
       platform.setSecret(API_KEY_SECRET, apiKey.value),
+      platform.setSecret(DEEP_API_KEY_SECRET, deepApiKey.value),
     ])
   }
 
@@ -134,12 +189,30 @@ export const useSettingsStore = defineStore('settings', () => {
     })
   }
 
-  async function testConnection(): Promise<{
+  function usesDeepModel(): boolean {
+    return Boolean((deepModel.value.trim() || deepBaseUrl.value.trim() || deepApiKey.value.trim()) && (deepApiKey.value || apiKey.value))
+  }
+
+  function createDeepClient() {
+    const key = deepApiKey.value || apiKey.value
+    if (!key) throw new Error('请先填写 API Key')
+    return createLlmClient({
+      baseUrl: deepBaseUrl.value || baseUrl.value,
+      apiKey: key,
+      model: deepModel.value || model.value,
+      fetch: platform.fetch,
+    })
+  }
+
+  function deepModelName(): string {
+    return deepModel.value || model.value
+  }
+
+  async function ping(client: ReturnType<typeof createLlmClient>): Promise<{
     jsonOk: boolean
     streamOk: boolean
     detail?: string
   }> {
-    const client = createClient()
     let jsonOk = false
     let streamOk = false
     const parts: string[] = []
@@ -185,12 +258,26 @@ export const useSettingsStore = defineStore('settings', () => {
     return { jsonOk, streamOk, detail: parts.join(' | ') }
   }
 
+  async function testConnection() {
+    return ping(createClient())
+  }
+
+  async function testDeepConnection() {
+    return ping(createDeepClient())
+  }
+
   return {
     baseUrl,
     model,
     apiKey,
     chapterReasoning,
     pricing,
+    deepBaseUrl,
+    deepModel,
+    deepApiKey,
+    deepReasoning,
+    deepPerChapter,
+    deepPricing,
     loaded,
     display,
     load,
@@ -198,6 +285,10 @@ export const useSettingsStore = defineStore('settings', () => {
     saveDisplay,
     save,
     createClient,
+    createDeepClient,
+    usesDeepModel,
+    deepModelName,
     testConnection,
+    testDeepConnection,
   }
 })

@@ -88,6 +88,8 @@
           @submit="onSubmit"
           @reroll="onReroll"
           @batch="onBatch"
+          @background="onBackground"
+          @deep="onDeep"
           @close="closeComments"
         />
         <div v-else class="reader__rail-empty">
@@ -130,6 +132,8 @@
         @submit="onSubmit"
         @reroll="onReroll"
         @batch="onBatch"
+        @background="onBackground"
+        @deep="onDeep"
         @close="closeComments"
       />
     </VanPopup>
@@ -793,6 +797,21 @@ async function onReroll() {
   if (!id) return
   await generation.reroll(id)
   await comments.open(id)
+}
+
+async function onBackground() {
+  const id = comments.activeId
+  if (!id) return
+  await generation.fetchBackground(id)
+  if (generation.notice) showToast(generation.notice)
+  await comments.open(id)
+}
+
+async function onDeep() {
+  const id = comments.activeId
+  if (!id) return
+  await generation.requestDeep(id)
+  if (generation.notice) showToast(generation.notice)
 }
 
 function onBatch(offset: number) {

@@ -1,7 +1,7 @@
 <template>
   <button
     class="bubble"
-    :class="{ 'bubble--hot': hot && !pending, 'bubble--pending': pending, 'bubble--locked': locked }"
+    :class="{ 'bubble--hot': hot && !pending, 'bubble--pending': pending, 'bubble--locked': locked, 'bubble--deep': deep && !pending }"
     type="button"
     :aria-label="pending ? '书友正在写' : locked ? `段评 ${count}，先写后看` : `段评 ${count}`"
     @click="emit('open')"
@@ -9,6 +9,7 @@
     <VanLoading v-if="pending" size="12px" color="currentColor" />
     <VanIcon v-else :name="locked ? 'lock' : 'chat-o'" />
     <span v-if="!pending">{{ count }}</span>
+    <span v-if="deep && !pending" class="bubble__deep">深</span>
   </button>
 </template>
 
@@ -20,6 +21,7 @@ defineProps<{
   hot: boolean
   pending: boolean
   locked?: boolean
+  deep?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -68,5 +70,9 @@ const emit = defineEmits<{
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--rs-border);
   color: var(--rs-muted, #78716c);
+}
+
+.bubble__deep {
+  font-weight: 700;
 }
 </style>

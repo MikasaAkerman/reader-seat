@@ -405,6 +405,8 @@ export async function deleteBook(bookId: string): Promise<void> {
       db.readingStates,
       db.generationLogs,
       db.bookFiles,
+      db.observations,
+      db.deepSpots,
     ],
     async () => {
       if (paragraphIds.length > 0) {
@@ -425,6 +427,8 @@ export async function deleteBook(bookId: string): Promise<void> {
       await db.userNotes.where('bookId').equals(bookId).delete()
       await db.readingStates.delete(bookId)
       await db.generationLogs.where('bookId').equals(bookId).delete()
+      await db.observations.where('bookId').equals(bookId).delete()
+      await db.deepSpots.where('bookId').equals(bookId).delete()
       await db.bookFiles.delete(bookId)
       await db.books.delete(bookId)
     },

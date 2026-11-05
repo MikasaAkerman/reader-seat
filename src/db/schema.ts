@@ -84,9 +84,16 @@ export interface CommentBatchRow {
   createdAt: string
 }
 
+export type CommentKind = 'short' | 'deep' | 'background'
+
+export interface CommentEvidence {
+  pid: string
+  quote: string
+}
+
 export interface CommentRow {
   id: string
-  /** 空字符串：用户主楼及其回复，不属于任何一批，每一批都显示。 */
+  /** 空字符串：用户主楼及其回复、长评、背景，不属于任何一批，每一批都显示。 */
   batchId: string
   paragraphId: string
   /** 主楼为空字符串，回复指向主楼 id */
@@ -95,6 +102,12 @@ export interface CommentRow {
   displayName: string
   role: string
   text: string
+  kind?: CommentKind
+  title?: string
+  evidence?: CommentEvidence[]
+  background?: string
+  question?: string
+  replyType?: string
   /** 同一批里的写入顺序，用来稳定楼中楼的前两条 */
   seq?: number
   mismatched?: boolean
@@ -102,6 +115,39 @@ export interface CommentRow {
   boring?: boolean
   spoiler?: boolean
   wrong?: boolean
+}
+
+export interface ObservationRow {
+  id: string
+  bookId: string
+  chapterId: string
+  paragraphId: string
+  oid: string
+  kind: string
+  quote: string
+  point: string
+  echoText?: string
+  assignedRole: string
+  assignedName: string
+  authorType: AuthorType
+  createdAt: string
+}
+
+export type DeepSpotStatus = 'planned' | 'done' | 'failed'
+
+export interface DeepSpotRow {
+  id: string
+  bookId: string
+  chapterId: string
+  startParagraphId: string
+  endParagraphId: string
+  startOrder: number
+  endOrder: number
+  label: string
+  why: string
+  lens: string
+  status: DeepSpotStatus
+  createdAt: string
 }
 
 export interface BookMemoryRow {
@@ -120,10 +166,18 @@ export interface BookMemoryRow {
   updatedAt: string
 }
 
+export interface DroppedLog {
+  quote: number
+  duplicate: number
+  entity: number
+  outside: number
+  spoiler: number
+}
+
 export interface GenerationLogRow {
   id: string
   bookId: string
-  type: 'rough' | 'refine' | 'live' | 'chapterTalk' | 'spoilerCheck'
+  type: 'rough' | 'refine' | 'live' | 'chapterTalk' | 'spoilerCheck' | 'deep' | 'background'
   createdAt: string
   ok: boolean
   promptTokens: number
@@ -133,6 +187,8 @@ export interface GenerationLogRow {
   cost: number
   error?: string
   latencyMs?: number
+  dropped?: DroppedLog
+  model?: string
 }
 
 export interface UserNoteRow {
@@ -192,6 +248,8 @@ export class ReaderSeatDB extends Dexie {
   generationLogs!: EntityTable<GenerationLogRow, 'id'>
   settings!: EntityTable<SettingsRow, 'key'>
   bookFiles!: EntityTable<BookFileRow, 'bookId'>
+  observations!: EntityTable<ObservationRow, 'id'>
+  deepSpots!: EntityTable<DeepSpotRow, 'id'>
 
   constructor() {
     super('reader-seat')
@@ -221,6 +279,10 @@ export class ReaderSeatDB extends Dexie {
           if (userRoots.has(row.id) || userRoots.has(row.parentId)) await comments.update(row.id, { batchId: '' })
         }
       })
+    this.version(3).stores({
+      observations: 'id, paragraphId, chapterId, bookId',
+      deepSpots: 'id, chapterId, bookId, [bookId+chapterId]',
+    })
   }
 }
 

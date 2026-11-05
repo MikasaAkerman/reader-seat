@@ -18,6 +18,7 @@ import { db, type BookRow, type ChapterRow, type ParagraphRow } from '@/db/schem
 
 const fake = vi.hoisted(() => ({
   jsonl: [] as unknown[],
+  observe: null as unknown,
   refine: null as unknown,
   chapter: null as unknown,
   spoilerFails: false,
@@ -39,6 +40,14 @@ function fakeClient(): LlmClient {
         fake.calls.push('chapter')
         return { data: schema.parse(fake.chapter), usage: EMPTY_USAGE }
       }
+      if (all.includes('只做观察')) {
+        fake.calls.push('observe')
+        return { data: schema.parse(fake.observe), usage: EMPTY_USAGE }
+      }
+      if (all.includes('挑选真正值得深入')) {
+        fake.calls.push('deepPlan')
+        return { data: schema.parse({ spots: [] }), usage: EMPTY_USAGE }
+      }
       fake.calls.push('json')
       return { data: schema.parse(fake.refine), usage: EMPTY_USAGE }
     },
@@ -57,10 +66,16 @@ vi.mock('@/stores/settings', () => ({
   useSettingsStore: () => ({
     loaded: true,
     apiKey: 'test',
+    model: 'test',
     chapterReasoning: false,
     pricing: { inputHitPerMTok: 0, inputMissPerMTok: 0, outputPerMTok: 0 },
+    deepPerChapter: 0,
+    deepReasoning: 'high',
+    deepPricing: { inputHitPerMTok: 0, inputMissPerMTok: 0, outputPerMTok: 0 },
+    deepModelName: () => 'test',
     load: async () => {},
     createClient: fakeClient,
+    createDeepClient: fakeClient,
   }),
 }))
 
@@ -111,10 +126,13 @@ beforeEach(async () => {
     db.commentBatches.clear(),
     db.bookMemories.clear(),
     db.generationLogs.clear(),
+    db.observations.clear(),
+    db.deepSpots.clear(),
   ])
   await db.books.add(book)
   await db.chapters.add(chapter)
   fake.jsonl = []
+  fake.observe = null
   fake.refine = null
   fake.chapter = null
   fake.spoilerFails = false
@@ -193,7 +211,7 @@ describe('generation store', () => {
 
   const refineResult = {
     pid: 'p2',
-    threads: [{ root: { author_type: 'resident', reader_role: '毒舌', text: '精修主楼' }, replies: [] }],
+    threads: [{ root: { author_type: 'resident', reader_role: '毒舌', text: '精修主楼，天还没亮。', quote: '天还没亮' }, replies: [] }],
     memory_updates: { nicknames: [{ character: '老周', nickname: '周叔', by: '毒舌' }] },
   }
 
@@ -209,18 +227,25 @@ describe('generation store', () => {
     await startStore()
 
     await vi.waitFor(async () => expect((await db.paragraphs.get('p2'))?.genStatus).toBe('refined'))
-    expect((await listThreads('p2')).map((thread) => thread.text)).toEqual(['精修主楼'])
+    expect((await listThreads('p2')).map((thread) => thread.text)).toEqual(['精修主楼，天还没亮。'])
     expect((await readMemory('book')).memory.nicknames.map((item) => item.nickname)).toEqual(['周叔'])
     expect(fake.calls).not.toContain('jsonl')
   })
 
   it('streams a cold block paragraph by paragraph and refines the hot one', async () => {
     await db.paragraphs.bulkAdd([paragraph(1), paragraph(2), paragraph(3)])
-    fake.jsonl = [
-      { pid: 'p1', score: 1, comments: [{ author_type: 'resident', reader_role: '共情派', text: '好冷' }] },
-      { pid: 'p2', score: 3, comments: [{ author_type: 'resident', reader_role: '毒舌', text: '热段占位' }], new_entities: ['老周'] },
-      { pid: 'p3', score: 0 },
-    ]
+    fake.observe = {
+      paragraphs: [
+        {
+          pid: 'p2',
+          score: 3,
+          observations: [{ oid: 'o1', kind: '矛盾', quote: '天还没亮', point: '天亮之前就有事' }],
+        },
+      ],
+      hot_pids: ['p2'],
+      new_entities: ['老周'],
+    }
+    fake.jsonl = [{ cid: 'c1', text: '热段占位，天还没亮。', quote: '天还没亮' }]
     fake.refine = refineResult
 
     await startStore()
@@ -228,7 +253,8 @@ describe('generation store', () => {
     await vi.waitFor(async () => expect((await db.paragraphs.get('p2'))?.genStatus).toBe('refined'))
     const rows = await db.paragraphs.bulkGet(['p1', 'p2', 'p3'])
     expect(rows.map((row) => row?.genStatus)).toEqual(['rough', 'refined', 'rough'])
-    expect((await listThreads('p1')).map((thread) => thread.text)).toEqual(['好冷'])
+    expect((await listThreads('p1')).map((thread) => thread.text)).toEqual([])
+    expect((await listThreads('p2')).map((thread) => thread.text)).toEqual(['精修主楼，天还没亮。'])
     expect((await readMemory('book')).entities).toContain('老周')
     expect(fake.calls.filter((call) => call === 'jsonl')).toHaveLength(1)
   })

@@ -11,6 +11,7 @@ describe('personas', () => {
       '老书虫',
     ])
     for (const persona of DEFAULT_LINEUP) {
+      expect(persona.voice.length).toBeGreaterThan(0)
       expect(persona.voiceSamples.length).toBeGreaterThanOrEqual(3)
       expect(persona.focus.length).toBeGreaterThan(0)
       expect(persona.taboos.length).toBeGreaterThan(0)

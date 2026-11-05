@@ -47,11 +47,16 @@ export interface BookMemory {
 export interface ResidentPersona {
   role: string
   displayName: string
+  /** 口吻描述，告诉模型怎么说，不是可照抄的句子。 */
+  voice: string
   voiceSamples: string[]
   focus: string
   taboos: string[]
   relations: { with: string; note: string }[]
 }
+
+export type ObservationKind = '动机' | '细节' | '修辞' | '疑问' | '呼应' | '结构' | '矛盾' | '伏笔'
+export type CommentKind = 'short' | 'deep' | 'background'
 
 export interface PasserbyProfile {
   displayName: string

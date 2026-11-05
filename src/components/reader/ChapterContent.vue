@@ -25,6 +25,7 @@
           :hot="bubbles[paragraph.id]?.hot ?? false"
           :pending="bubbles[paragraph.id]?.pending ?? false"
           :locked="bubbles[paragraph.id]?.locked ?? false"
+          :deep="bubbles[paragraph.id]?.deep ?? false"
           @open="emit('open', paragraph.id)"
         />
         <button

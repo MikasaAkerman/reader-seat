@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { canReroll, latestBatch, nextBatchNo, rerollsOnDay } from '@/core/comments/batches'
-import { summarizeCosts } from '@/core/cost/summary'
+import { summarizeCosts, summarizeQuality } from '@/core/cost/summary'
 import { buildReadingMarkdown, paragraphOpening } from '@/core/export/markdown'
 import { chapterTalkResultSchema } from '@/core/generation/schema'
 import { commentPasses } from '@/core/generation/spoiler'
@@ -170,5 +170,40 @@ describe('cost summary', () => {
     expect(summary.books[1]?.latencyMs).toBeNull()
     expect(summary.days.map((day) => day.day)).toEqual(['2026-11-04', '2026-11-03'])
     expect(summary.days[0]).toMatchObject({ calls: 2, cost: 0.2 })
+  })
+})
+
+describe('quality summary', () => {
+  it('aggregates dropped counts and scores mixed comments as more diverse', () => {
+    const summary = summarizeQuality(
+      [
+        {
+          bookId: 'a',
+          createdAt: '2026-11-05T08:00:00',
+          promptTokens: 10,
+          completionTokens: 4,
+          cacheHitTokens: 0,
+          cost: 0.01,
+          type: 'rough',
+          model: 'main',
+          dropped: { quote: 2, duplicate: 1, entity: 0, outside: 1, spoiler: 0 },
+        },
+        {
+          bookId: 'a',
+          createdAt: '2026-11-05T09:00:00',
+          promptTokens: 8,
+          completionTokens: 20,
+          cacheHitTokens: 0,
+          cost: 0.2,
+          type: 'deep',
+          model: 'deep',
+        },
+      ],
+      ['换我早受不了了', '注意这里的视角', '帆上的补丁才是基调'],
+    )
+    expect(summary.dropped).toEqual({ quote: 2, duplicate: 1, entity: 0, outside: 1, spoiler: 0 })
+    expect(summary.dropRate).toBeGreaterThan(0)
+    expect(summary.diversity).toBeGreaterThan(0.5)
+    expect(summary.byModel.map((row) => row.model)).toEqual(['deep', 'main'])
   })
 })

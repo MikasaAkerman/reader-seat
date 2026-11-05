@@ -16,6 +16,8 @@ const TABLES = [
   'readingStates',
   'generationLogs',
   'settings',
+  'observations',
+  'deepSpots',
 ] as const
 
 function isSecret(row: unknown): boolean {

@@ -4,53 +4,64 @@ import {
   PROMPT_VERSION,
   buildChapterTalkPrompt,
   buildLivePrompt,
+  buildObservePrompt,
   buildRefinePrompt,
-  buildRoughPrompt,
+  buildVoicePrompt,
 } from '@/core/prompts'
 
-const roughCtx = {
+const observeCtx = {
   title: '样例',
   spoilerLevel: '严格',
   memorySnapshot: '外号：（无）',
   priorSummary: '（无）',
   blockText: 'p1 天还没亮。\np2 他推开了门。',
-  knownEntities: [],
+  knownEntities: [] as string[],
+  maxPicks: 1,
+  paragraphCount: 2,
 }
-const rough = buildRoughPrompt(roughCtx)
+const observe = buildObservePrompt(observeCtx)
 
-describe('prompts v5', () => {
-  it('is version 5 and lists banned phrases', () => {
-    expect(PROMPT_VERSION).toBe(5)
-    const system = rough[0]?.content ?? ''
+describe('prompts v6', () => {
+  it('is version 6 and lists banned phrases', () => {
+    expect(PROMPT_VERSION).toBe(6)
+    const system = observe[0]?.content ?? ''
     for (const phrase of BANNED_PHRASES) expect(system).toContain(phrase)
-    expect(system).toContain('"paragraphs"')
-    expect(system).toContain('"prediction_hits"')
-    expect(rough.map((m) => m.content).join('\n')).toContain('json')
+    expect(system).toContain('只做观察')
+    expect(system).toContain('hot_pids')
+    expect(observe.map((m) => m.content).join('\n')).toContain('json')
   })
 
-  it('puts the most stable messages first in the rough prompt', () => {
-    expect(rough.map((m) => m.role)).toEqual(['system', 'user', 'user', 'user', 'user'])
-    expect(rough[1]?.content.startsWith('书友设定')).toBe(true)
-    expect(rough[2]?.content.startsWith('书籍信息')).toBe(true)
-    expect(rough[2]?.content).toContain('前文摘要')
-    expect(rough[3]?.content.startsWith('书圈记忆')).toBe(true)
-    expect(rough[4]?.content.startsWith('当前块')).toBe(true)
-    expect(rough.map((m) => m.content)).toMatchSnapshot()
+  it('puts the most stable messages first in the observe prompt', () => {
+    expect(observe.map((m) => m.role)).toEqual(['system', 'user', 'user', 'user', 'user'])
+    expect(observe[1]?.content.startsWith('书友关注点')).toBe(true)
+    expect(observe[2]?.content.startsWith('书籍信息')).toBe(true)
+    expect(observe[2]?.content).toContain('前文摘要')
+    expect(observe[3]?.content.startsWith('书圈记忆')).toBe(true)
+    expect(observe[4]?.content).toContain('当前块')
+    expect(observe.map((m) => m.content)).toMatchSnapshot()
   })
 
   it('keeps the system and first messages identical between blocks of a chapter', () => {
-    const next = buildRoughPrompt({ ...roughCtx, blockText: 'p1 门外有人。', memorySnapshot: '外号：老周' })
-    expect(next.slice(0, 3)).toEqual(rough.slice(0, 3))
+    const next = buildObservePrompt({ ...observeCtx, blockText: 'p1 门外有人。', memorySnapshot: '外号：老周' })
+    expect(next.slice(0, 3)).toEqual(observe.slice(0, 3))
   })
 
-  it('marks preceding text as read-only and asks for json lines when streaming', () => {
-    const streamed = buildRoughPrompt({ ...roughCtx, beforeText: 'p0 前一段。' }, 'jsonl')
-    expect(streamed[4]?.content.startsWith('本章上文（只读）')).toBe(true)
-    expect(streamed[0]?.content).toContain('一行一个 json 对象')
-    expect(streamed[0]?.content).toContain('new_entities')
+  it('marks preceding text as read-only', () => {
+    const withBefore = buildObservePrompt({ ...observeCtx, beforeText: 'p0 前一段。' })
+    expect(withBefore[4]?.content.startsWith('本章上文（只读）')).toBe(true)
   })
 
-  it('asks refine for threads and a json object', () => {
+  it('asks voice for assigned cid lines', () => {
+    const messages = buildVoicePrompt({
+      assignments: 'c1 | p1 | 常驻 毒舌 | 观察：矛盾 | 引文：天还没亮',
+      recentComments: '这句话先别滑过去。',
+    })
+    expect(messages[0]?.content).toContain('一行一个 json 对象')
+    expect(messages[1]?.content).toContain('c1')
+    expect(messages[1]?.content).toContain('这句话先别滑过去')
+  })
+
+  it('asks refine for assigned observations and a json object', () => {
     const messages = buildRefinePrompt({
       title: '样例',
       spoilerLevel: '严格',
@@ -58,20 +69,15 @@ describe('prompts v5', () => {
       priorSummary: '（无）',
       textUntilHot: 'p1 天还没亮。',
       pid: 'p1',
-      hotReason: '粗评分为 3',
+      hotReason: '观察步骤评为热段',
       residentState: '（无）',
+      assignments: 'c1 | 动机 | 引文：天还没亮',
     })
     const system = messages[0]?.content ?? ''
     expect(system).toContain('4 到 6 条主楼')
     expect(system).toContain('常驻书友最多 2 位')
-    expect(system).toContain('1 到 2')
-    expect(system).toContain('最多 3 条回复')
-    expect(system).toContain('"threads"')
-    expect(system).toContain('"memory_updates"')
-    expect(system).toContain('json')
-    expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'user', 'user', 'user'])
-    expect(messages[2]?.content.startsWith('书籍信息')).toBe(true)
-    expect(messages[4]?.content).toContain('p1')
+    expect(system).toContain('原文短引文')
+    expect(messages[4]?.content).toContain('已分配的观察点')
   })
 
   it('ends the live prompt with what the reader just wrote', () => {

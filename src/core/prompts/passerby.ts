@@ -4,6 +4,7 @@ import { PROMPT_VERSION, SHARED_CONSTRAINTS } from './constraints'
 export interface PasserbyPromptContext {
   text: string
   kept: string
+  names?: string
 }
 
 export function buildPasserbyPrompt(ctx: PasserbyPromptContext): ChatMessage[] {
@@ -12,14 +13,14 @@ export function buildPasserbyPrompt(ctx: PasserbyPromptContext): ChatMessage[] {
       role: 'system',
       content: [
         SHARED_CONSTRAINTS,
-        '本任务只换路人。写 2 到 3 条路人短评，不要写常驻书友，不要重复下面已经留下的发言。',
+        '本任务只换路人。写 2 到 3 条路人短评，不要写常驻书友，不要重复下面已经留下的发言。每条带一句原文短引文。',
         `提示词版本：${PROMPT_VERSION}`,
         '只返回一个 json 对象。comments 里每条有 display_name、text、uses_outside_plot。',
       ].join('\n'),
     },
     {
       role: 'user',
-      content: `已留下的发言\n${ctx.kept || '（无）'}\n\n这一段\n${ctx.text}`,
+      content: `已留下的发言\n${ctx.kept || '（无）'}\n\n路人身份（按顺序用这些名字）\n${ctx.names || '（随机）'}\n\n这一段\n${ctx.text}`,
     },
   ]
 }
