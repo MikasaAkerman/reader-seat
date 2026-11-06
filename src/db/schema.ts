@@ -123,6 +123,8 @@ export interface CommentRow {
   boring?: boolean
   spoiler?: boolean
   wrong?: boolean
+  /** 自动剧透校验未通过：保留正文，界面默认折叠。 */
+  folded?: boolean
 }
 
 export interface ObservationRow {
@@ -218,6 +220,8 @@ export interface UserNoteRow {
 export interface TalkLine {
   role: string
   text: string
+  /** 自动剧透校验未通过时折叠，读者可手动展开。 */
+  folded?: boolean
 }
 
 export interface ChapterTalkRow {

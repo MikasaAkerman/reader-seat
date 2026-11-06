@@ -10,19 +10,28 @@
           <span v-if="kindBadge" class="thread__badge">{{ kindBadge }}</span>
           <span v-else-if="badge(thread.authorType)" class="thread__badge">{{ badge(thread.authorType) }}</span>
         </header>
-        <h3 v-if="thread.title" class="thread__title">{{ thread.title }}</h3>
-        <p class="thread__text" :class="{ 'thread__text--fold': foldable && !expandedBody }">{{ thread.text }}</p>
-        <button v-if="foldable" type="button" class="thread__more" @click="expandedBody = !expandedBody">
-          {{ expandedBody ? '收起' : '展开全文' }}
-        </button>
-        <blockquote v-for="(item, index) in thread.evidence ?? []" :key="index" class="thread__quote">
-          {{ item.quote }}
-        </blockquote>
-        <details v-if="thread.background" class="thread__background">
-          <summary>背景知识，未核实</summary>
-          <p>{{ thread.background }}</p>
-        </details>
-        <p v-if="thread.question" class="thread__question">问一句：{{ thread.question }}</p>
+        <template v-if="rootHeld">
+          <p class="thread__hold">
+            <span>可能有剧透</span>
+            <button type="button" class="thread__more" @click="toggleSpoiler(thread.id)">展开</button>
+          </p>
+        </template>
+        <template v-else>
+          <h3 v-if="thread.title" class="thread__title">{{ thread.title }}</h3>
+          <p class="thread__text" :class="{ 'thread__text--fold': foldable && !expandedBody }">{{ thread.text }}</p>
+          <button v-if="foldable" type="button" class="thread__more" @click="expandedBody = !expandedBody">
+            {{ expandedBody ? '收起' : '展开全文' }}
+          </button>
+          <blockquote v-for="(item, index) in thread.evidence ?? []" :key="index" class="thread__quote">
+            {{ item.quote }}
+          </blockquote>
+          <details v-if="thread.background" class="thread__background">
+            <summary>背景知识，未核实</summary>
+            <p>{{ thread.background }}</p>
+          </details>
+          <p v-if="thread.question" class="thread__question">问一句：{{ thread.question }}</p>
+          <button v-if="thread.folded" type="button" class="thread__more" @click="toggleSpoiler(thread.id)">收起</button>
+        </template>
         <div class="thread__actions">
           <span v-if="flagged(thread.marks)" class="thread__flag">已标{{ flagged(thread.marks) }}</span>
           <IconButton icon="chat-o" label="回复" variant="muted" @click="emit('reply', thread.id, thread.displayName)" />
@@ -42,7 +51,14 @@
               <strong>{{ reply.displayName }}</strong>
               <span v-if="badge(reply.authorType)" class="thread__badge">{{ badge(reply.authorType) }}</span>
             </header>
-            <p class="thread__text">{{ reply.text }}</p>
+            <p v-if="reply.folded && !spoilerOpen(reply.id)" class="thread__hold">
+              <span>可能有剧透</span>
+              <button type="button" class="thread__more" @click="toggleSpoiler(reply.id)">展开</button>
+            </p>
+            <template v-else>
+              <p class="thread__text">{{ reply.text }}</p>
+              <button v-if="reply.folded" type="button" class="thread__more" @click="toggleSpoiler(reply.id)">收起</button>
+            </template>
             <div class="thread__actions">
               <span v-if="flagged(reply.marks)" class="thread__flag">已标{{ flagged(reply.marks) }}</span>
               <IconButton
@@ -106,7 +122,11 @@ const FLAGS: { id: FlagKey; label: string }[] = [
 
 const expanded = ref(false)
 const expandedBody = ref(false)
-const foldable = computed(() => props.thread.kind === 'deep' && props.thread.text.length > 160)
+const openedSpoilers = ref(new Set<string>())
+const rootHeld = computed(() => props.thread.folded === true && !openedSpoilers.value.has(props.thread.id))
+const foldable = computed(
+  () => props.thread.kind === 'deep' && props.thread.text.length > 160 && !rootHeld.value,
+)
 const kindBadge = computed(() => {
   if (props.thread.kind === 'deep') return '长评'
   if (props.thread.kind === 'background') return '背景知识，未核实'
@@ -122,6 +142,17 @@ const markActions = computed<ActionSheetAction[]>(() =>
     return { name: on ? `取消「${flag.label}」` : `标为${flag.label}`, color: on ? 'var(--rs-accent)' : undefined }
   }),
 )
+
+function spoilerOpen(id: string): boolean {
+  return openedSpoilers.value.has(id)
+}
+
+function toggleSpoiler(id: string) {
+  const next = new Set(openedSpoilers.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  openedSpoilers.value = next
+}
 
 function badge(authorType: AuthorType): string {
   if (authorType === 'user') return ''
@@ -294,6 +325,15 @@ function onMark(_action: ActionSheetAction, index: number) {
 
 .thread__reply + .thread__reply {
   margin-top: var(--rs-space-2);
+}
+
+.thread__hold {
+  display: flex;
+  align-items: center;
+  gap: var(--rs-space-2);
+  margin: var(--rs-space-1) 0;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-sm);
 }
 
 .thread__more {

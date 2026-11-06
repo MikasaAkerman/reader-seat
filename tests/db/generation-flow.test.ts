@@ -22,6 +22,8 @@ const fake = vi.hoisted(() => ({
   refine: null as unknown,
   chapter: null as unknown,
   spoilerFails: false,
+  spoilerRejects: false,
+  deep: null as unknown,
   calls: [] as string[],
   prompts: [] as string[],
 }))
@@ -34,6 +36,17 @@ function fakeClient(): LlmClient {
       if (all.includes('检查读书评论有没有剧透')) {
         fake.calls.push('spoiler')
         if (fake.spoilerFails) throw new Error('校验服务挂了')
+        if (fake.spoilerRejects) {
+          return {
+            data: schema.parse({
+              results: [
+                { id: 'r0', pass: false },
+                { id: 'r0-0', pass: false },
+              ],
+            }),
+            usage: EMPTY_USAGE,
+          }
+        }
         return { data: schema.parse({ results: [{ id: 'r0', pass: true }] }), usage: EMPTY_USAGE }
       }
       if (all.includes('章末整理')) {
@@ -47,6 +60,10 @@ function fakeClient(): LlmClient {
       if (all.includes('挑选真正值得深入')) {
         fake.calls.push('deepPlan')
         return { data: schema.parse({ spots: [] }), usage: EMPTY_USAGE }
+      }
+      if (all.includes('深读长评')) {
+        fake.calls.push('deep')
+        return { data: schema.parse(fake.deep), usage: EMPTY_USAGE }
       }
       fake.calls.push('json')
       return { data: schema.parse(fake.refine), usage: EMPTY_USAGE }
@@ -131,7 +148,9 @@ beforeEach(async () => {
   fake.observe = null
   fake.refine = null
   fake.chapter = null
+  fake.deep = null
   fake.spoilerFails = false
+  fake.spoilerRejects = false
   fake.calls = []
   fake.prompts = []
 })
@@ -304,6 +323,77 @@ describe('generation store', () => {
     expect(fake.calls).not.toContain('observe')
     expect(fake.calls).not.toContain('jsonl')
     expect((await db.paragraphs.get('p1'))?.genStatus).toBe('none')
+  })
+
+  it('folds a refined comment when the spoiler check rejects it', async () => {
+    await db.books.update('book', { spoilerLevel: '严格' })
+    await db.paragraphs.bulkAdd([
+      paragraph(1, { genStatus: 'rough', score: 1 }),
+      paragraph(2, { genStatus: 'refining', score: 3 }),
+    ])
+    await saveParagraphComments('p2', [resident('占位')], 3, 'refining')
+    fake.refine = refineResult
+    fake.spoilerRejects = true
+
+    await startStore()
+
+    await vi.waitFor(async () => expect((await db.paragraphs.get('p2'))?.genStatus).toBe('refined'))
+    const threads = await listThreads('p2')
+    expect(threads.map((thread) => thread.text)).toEqual(['精修主楼，天还没亮。'])
+    expect(threads[0]?.folded).toBe(true)
+  })
+
+  it('keeps a deep comment when spoilers are fully open', async () => {
+    await db.books.update('book', { longComments: true, spoilerLevel: '全开放' })
+    await db.paragraphs.add(paragraph(1, { genStatus: 'refined', score: 1 }))
+    fake.deep = {
+      thesis: {
+        author: '课代表',
+        title: '出发',
+        body: '第1段，天还没亮。他停在这里。',
+        evidence: [
+          { pid: 'p1', quote: '天还没亮' },
+          { pid: 'p1', quote: '第1段，天还没亮' },
+        ],
+      },
+      rebuttal: { author: '毒舌', body: '也可以只是随口一笔。' },
+      background: '',
+      question: '他为什么还站着？',
+    }
+    const store = await startStore()
+    await store.requestDeep('p1')
+    expect(fake.calls).toContain('deep')
+    expect(fake.calls).not.toContain('spoiler')
+    expect((await listThreads('p1')).some((thread) => thread.text.includes('天还没亮'))).toBe(true)
+    expect(store.notice).toBe('长评写好了')
+  })
+
+  it('keeps a deep comment folded when the spoiler check rejects it', async () => {
+    await db.books.update('book', { longComments: true, spoilerLevel: '严格' })
+    await db.paragraphs.add(paragraph(1, { genStatus: 'refined', score: 1 }))
+    fake.deep = {
+      thesis: {
+        author: '课代表',
+        title: '出发',
+        body: '第1段，天还没亮。他停在这里。',
+        evidence: [
+          { pid: 'p1', quote: '天还没亮' },
+          { pid: 'p1', quote: '第1段，天还没亮' },
+        ],
+      },
+      rebuttal: { author: '毒舌', body: '也可以只是随口一笔。' },
+      background: '',
+      question: '他为什么还站着？',
+    }
+    fake.spoilerRejects = true
+    const store = await startStore()
+    await store.requestDeep('p1')
+    const thread = (await listThreads('p1')).find((item) => item.kind === 'deep')
+    expect(thread?.text).toContain('天还没亮')
+    expect(thread?.folded).toBe(true)
+    expect(thread?.replies[0]?.text).toBe('也可以只是随口一笔。')
+    expect(thread?.replies[0]?.folded).toBe(true)
+    expect(store.notice).toBe('长评写好了')
   })
 
   it('does not plan a long comment when the book turns them off', async () => {

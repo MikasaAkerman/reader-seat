@@ -12,7 +12,7 @@ export interface VoiceAccept {
 }
 
 export function voiceMaxTokens(slotCount: number): number {
-  return Math.min(2000, 200 + 120 * Math.max(1, slotCount))
+  return Math.min(4000, 400 + 400 * Math.max(1, slotCount))
 }
 
 export function voiceAssignments(slots: AssignedSlot[]): string {

@@ -1,7 +1,7 @@
 export { planBlocks, splitParagraphs, formatBlock } from './blocks'
 export { filterByEntityRule } from './entities'
 export { runChapterTalk } from './chapter'
-export { runLiveReply } from './live'
+export { runDialogue, runLiveReply } from './live'
 export { runPasserbyBatch } from './passerby'
 export { runRefine } from './refine'
 export { runObserve } from './observe'

@@ -29,6 +29,8 @@ export interface StoredComment {
   background?: string
   question?: string
   replyType?: string
+  /** 自动剧透校验未通过，展示时默认折叠。 */
+  folded?: boolean
   replies?: StoredComment[]
 }
 
@@ -47,6 +49,7 @@ export interface ReaderReply {
   text: string
   kind?: CommentKind
   marks: CommentMarks
+  folded?: boolean
 }
 
 export interface ReaderThread {
@@ -61,6 +64,7 @@ export interface ReaderThread {
   background?: string
   question?: string
   marks: CommentMarks
+  folded?: boolean
   replies: ReaderReply[]
 }
 
@@ -155,7 +159,7 @@ export async function commentsInBatch(batchId: string) {
 
 export async function shortReaction(paragraphId: string): Promise<{ text: string } | null> {
   const threads = await listThreads(paragraphId)
-  const line = threads.find((thread) => thread.authorType !== 'user' && thread.text.trim())
+  const line = threads.find((thread) => thread.authorType !== 'user' && thread.text.trim() && !thread.folded)
   if (!line) return null
   return { text: line.text.slice(0, 40) }
 }
@@ -177,6 +181,7 @@ export function threadsFrom(comments: CommentRow[]): ReaderThread[] {
     background: root.background,
     question: root.question,
     marks: marksOf(root),
+    folded: root.folded === true,
     replies: replies
       .filter((reply) => reply.parentId === root.id)
       .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
@@ -188,6 +193,7 @@ export function threadsFrom(comments: CommentRow[]): ReaderThread[] {
         text: reply.text,
         kind: reply.kind,
         marks: marksOf(reply),
+        folded: reply.folded === true,
       })),
   }))
   return threads
@@ -375,6 +381,7 @@ function toRow(
     background: comment.background,
     question: comment.question,
     replyType: comment.replyType,
+    folded: comment.folded,
     seq,
   }
 }

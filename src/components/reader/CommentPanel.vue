@@ -55,21 +55,37 @@
             v-if="allowReroll"
             class="panel__reroll"
             icon="replay"
-            :label="rerollsLeft > 0 ? `换一批（今天还剩 ${rerollsLeft} 次）` : '换一批（今天已用完）'"
+            :label="toolBusy === 'reroll' ? '正在换一批' : rerollsLeft > 0 ? `换一批（今天还剩 ${rerollsLeft} 次）` : '换一批（今天已用完）'"
             variant="muted"
-            :disabled="rerollsLeft <= 0"
+            :disabled="rerollsLeft <= 0 || (Boolean(toolBusy) && toolBusy !== 'reroll')"
+            :loading="toolBusy === 'reroll'"
             @click="emit('reroll')"
           >
-            <span class="panel__reroll-text">换一批 · {{ rerollsLeft }}</span>
+            <span class="panel__reroll-text">{{ toolBusy === 'reroll' ? '正在换一批' : `换一批 · ${rerollsLeft}` }}</span>
           </IconButton>
-          <IconButton icon="info-o" label="查背景" variant="muted" @click="emit('background')">
-            <span class="panel__reroll-text">查背景</span>
+          <IconButton
+            icon="info-o"
+            :label="toolBusy === 'background' ? '正在查背景' : '查背景'"
+            variant="muted"
+            :disabled="Boolean(toolBusy) && toolBusy !== 'background'"
+            :loading="toolBusy === 'background'"
+            @click="emit('background')"
+          >
+            <span class="panel__reroll-text">{{ toolBusy === 'background' ? '正在查背景' : '查背景' }}</span>
           </IconButton>
-          <IconButton v-if="allowDeep" icon="notes-o" label="深入聊聊" variant="muted" @click="emit('deep')">
-            <span class="panel__reroll-text">深入聊聊</span>
+          <IconButton
+            v-if="allowDeep"
+            icon="notes-o"
+            :label="toolBusy === 'deep' ? '正在写长评' : '深入聊聊'"
+            variant="muted"
+            :disabled="Boolean(toolBusy) && toolBusy !== 'deep'"
+            :loading="toolBusy === 'deep'"
+            @click="emit('deep')"
+          >
+            <span class="panel__reroll-text">{{ toolBusy === 'deep' ? '正在写长评' : '深入聊聊' }}</span>
           </IconButton>
         </div>
-        <p v-if="rerollMessage" class="panel__note">{{ rerollMessage }}</p>
+        <p v-if="rerollMessage && !toolBusy" class="panel__note">{{ rerollMessage }}</p>
       </template>
 
       <div v-if="replying" class="panel__note panel__note--live">
@@ -151,6 +167,7 @@ const props = withDefaults(
     rerollMessage?: string
     allowReroll?: boolean
     allowDeep?: boolean
+    toolBusy?: '' | 'reroll' | 'background' | 'deep'
   }>(),
   {
     locked: false,
@@ -160,6 +177,7 @@ const props = withDefaults(
     rerollMessage: '',
     allowReroll: true,
     allowDeep: true,
+    toolBusy: '',
   },
 )
 

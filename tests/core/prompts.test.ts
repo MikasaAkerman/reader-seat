@@ -3,7 +3,9 @@ import {
   BANNED_PHRASES,
   PROMPT_VERSION,
   buildChapterTalkPrompt,
+  buildDialoguePrompt,
   buildLivePrompt,
+  buildPasserbyPrompt,
   buildObservePrompt,
   buildRefinePrompt,
   buildVoicePrompt,
@@ -21,9 +23,9 @@ const observeCtx = {
 }
 const observe = buildObservePrompt(observeCtx)
 
-describe('prompts v6', () => {
-  it('is version 6 and lists banned phrases', () => {
-    expect(PROMPT_VERSION).toBe(6)
+describe('prompts v7', () => {
+  it('is version 7 and lists banned phrases', () => {
+    expect(PROMPT_VERSION).toBe(7)
     const system = observe[0]?.content ?? ''
     for (const phrase of BANNED_PHRASES) expect(system).toContain(phrase)
     expect(system).toContain('只做观察')
@@ -91,6 +93,32 @@ describe('prompts v6', () => {
       repliers: [{ role: '共情派', displayName: '共情派', voice: '' }],
     })
     expect(messages.at(-1)?.content).toContain('这开头好冷')
+    expect(messages.map((item) => item.content).join('\n')).toContain('建议 40 字左右')
+  })
+
+  it('answers the reader when there is no mention', () => {
+    const messages = buildDialoguePrompt({
+      title: '样例',
+      spoilerLevel: '严格',
+      memorySnapshot: '（空）',
+      priorSummary: '（无）',
+      textUntilHere: 'p1 天还没亮。',
+      userText: '为什么天还没亮？',
+      speakerName: '课代表',
+      speakerVoice: '把这一段讲清楚',
+    })
+    const all = messages.map((item) => item.content).join('\n')
+    expect(all).toContain('为什么天还没亮？')
+    expect(all).toContain('根据这句话回答')
+    expect(all).not.toContain('不回答问题')
+    expect(all).not.toContain('40 字以内')
+  })
+
+  it('asks passersby for short lines without the shared short-comment ban', () => {
+    const messages = buildPasserbyPrompt({ text: '天还没亮。', kept: '课代表：冷。' })
+    const all = messages.map((item) => item.content).join('\n')
+    expect(all).toContain('2 到 3 条')
+    expect(all).not.toContain('不回答问题')
   })
 
   it('passes the synopsis to chapter talk and asks for a synopsis update', () => {

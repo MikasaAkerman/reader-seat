@@ -61,13 +61,13 @@ export const DEEP_JSON_EXAMPLE = `{
   "thesis": {
     "author": "课代表",
     "title": "一句话论点",
-    "body": "400到800字的主评",
+    "body": "主评正文",
     "evidence": [{ "pid": "p12", "quote": "原文短引" }, { "pid": "p14", "quote": "另一处原文" }],
     "reservation": "还不能确定的一点"
   },
   "rebuttal": {
     "author": "毒舌",
-    "body": "200到500字，回应主评并给出替代解读",
+    "body": "反方正文，回应主评并给出替代解读",
     "evidence": [{ "pid": "p12", "quote": "原文短引" }]
   },
   "background": "可选的批评观点或创作背景，不得涉及本书后文",

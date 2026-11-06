@@ -1,21 +1,26 @@
 <template>
   <button
     class="icon-button"
-    :class="[`icon-button--${variant}`, { 'icon-button--labeled': label && showLabel, 'icon-button--active': active }]"
+    :class="[
+      `icon-button--${variant}`,
+      { 'icon-button--labeled': label && showLabel, 'icon-button--active': active, 'icon-button--loading': loading },
+    ]"
     :type="type"
     :aria-label="label"
     :aria-pressed="active === undefined ? undefined : active"
     :title="label"
     :disabled="disabled"
+    :aria-busy="loading || undefined"
   >
-    <VanIcon :name="icon" class="icon-button__icon" />
+    <VanLoading v-if="loading" size="16px" />
+    <VanIcon v-else :name="icon" class="icon-button__icon" />
     <span v-if="label && showLabel" class="icon-button__label">{{ label }}</span>
     <slot />
   </button>
 </template>
 
 <script setup lang="ts">
-import { Icon as VanIcon } from 'vant'
+import { Icon as VanIcon, Loading as VanLoading } from 'vant'
 
 withDefaults(
   defineProps<{
@@ -25,9 +30,10 @@ withDefaults(
     variant?: 'default' | 'accent' | 'danger' | 'muted'
     active?: boolean
     disabled?: boolean
+    loading?: boolean
     type?: 'button' | 'submit'
   }>(),
-  { showLabel: false, variant: 'default', active: undefined, disabled: false, type: 'button' },
+  { showLabel: false, variant: 'default', active: undefined, disabled: false, loading: false, type: 'button' },
 )
 </script>
 
@@ -57,6 +63,11 @@ withDefaults(
   &:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  &--loading {
+    color: var(--rs-accent);
+    pointer-events: none;
   }
 }
 

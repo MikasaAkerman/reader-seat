@@ -82,6 +82,7 @@
           :reroll-message="generation.rerollMessage"
           :allow-reroll="shortOn"
           :allow-deep="longOn"
+          :tool-busy="toolBusy"
           @retry="onRetry(comments.activeId)"
           @retry-reply="generation.retryReply()"
           @reply="startReply"
@@ -128,6 +129,7 @@
         :reroll-message="generation.rerollMessage"
         :allow-reroll="shortOn"
         :allow-deep="longOn"
+        :tool-busy="toolBusy"
         @retry="onRetry(comments.activeId)"
         @retry-reply="generation.retryReply()"
         @reply="startReply"
@@ -328,6 +330,7 @@ const error = ref('')
 const tocOpen = ref(false)
 const displayOpen = ref(false)
 const panelOpen = ref(false)
+const toolBusy = ref<'' | 'reroll' | 'background' | 'deep'>('')
 const notesOpen = ref(false)
 const replyTo = ref<{ id: string; name: string } | null>(null)
 const wide = ref(false)
@@ -800,26 +803,38 @@ async function onMicro(payload: { judgment: string; evidence: string; reservatio
   await comments.loadChapter(chapterId.value, new Set(generation.pendingIds))
 }
 
-async function onReroll() {
+async function runTool(kind: 'reroll' | 'background' | 'deep', task: (id: string) => Promise<void>) {
+  if (toolBusy.value) return
   const id = comments.activeId
   if (!id) return
-  await generation.reroll(id)
-  await comments.open(id)
+  toolBusy.value = kind
+  try {
+    await task(id)
+  } finally {
+    toolBusy.value = ''
+  }
+}
+
+async function onReroll() {
+  await runTool('reroll', async (id) => {
+    await generation.reroll(id)
+    await comments.open(id)
+  })
 }
 
 async function onBackground() {
-  const id = comments.activeId
-  if (!id) return
-  await generation.fetchBackground(id)
-  if (generation.notice) showToast(generation.notice)
-  await comments.open(id)
+  await runTool('background', async (id) => {
+    await generation.fetchBackground(id)
+    if (generation.notice) showToast(generation.notice)
+    await comments.open(id)
+  })
 }
 
 async function onDeep() {
-  const id = comments.activeId
-  if (!id) return
-  await generation.requestDeep(id)
-  if (generation.notice) showToast(generation.notice)
+  await runTool('deep', async (id) => {
+    await generation.requestDeep(id)
+    if (generation.notice) showToast(generation.notice)
+  })
 }
 
 function onBatch(offset: number) {

@@ -38,7 +38,7 @@ export async function runRefine(
   signal?: AbortSignal,
 ): Promise<RefineResult & { usage: LlmUsage; dropped: DroppedCounts }> {
   const { data, usage } = await client.chatJson(buildRefinePrompt(ctx), refineResultSchema, {
-    maxTokens: 2000,
+    maxTokens: 4000,
     timeoutMs: 60_000,
     reasoning: 'off',
     signal,

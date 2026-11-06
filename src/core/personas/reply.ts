@@ -13,6 +13,30 @@ export interface Replier {
   voice: string
 }
 
+function asResident(persona: ResidentPersona): Replier {
+  return {
+    authorType: 'resident',
+    role: persona.role,
+    displayName: persona.displayName,
+    voice: persona.voice,
+  }
+}
+
+/** 没有 @ 时的回答者：优先是被回复的那位书友，否则是课代表。 */
+export function dialogueSpeaker(lineup: ResidentPersona[], replyTo?: SpokenComment): Replier {
+  if (replyTo && replyTo.authorType !== 'user') {
+    if (replyTo.authorType === 'resident') {
+      const persona = lineup.find((item) => item.role === replyTo.role || item.displayName === replyTo.displayName)
+      if (persona) return asResident(persona)
+      return { authorType: 'resident', role: replyTo.role, displayName: replyTo.displayName, voice: '' }
+    }
+    return { authorType: 'passerby', role: replyTo.role, displayName: replyTo.displayName, voice: '' }
+  }
+  const host = lineup.find((persona) => persona.role === '课代表') ?? lineup[0]
+  if (host) return asResident(host)
+  return { authorType: 'resident', role: '课代表', displayName: '课代表', voice: '' }
+}
+
 export function pickRepliers(input: {
   lineup: ResidentPersona[]
   spoken: SpokenComment[]
@@ -25,13 +49,6 @@ export function pickRepliers(input: {
     if (picked.some((item) => item.role === person.role && item.displayName === person.displayName)) return
     picked.push(person)
   }
-  const asResident = (persona: ResidentPersona): Replier => ({
-    authorType: 'resident',
-    role: persona.role,
-    displayName: persona.displayName,
-    voice: persona.voice,
-  })
-
   const mentioned = input.mention
     ? input.lineup.find((persona) => persona.role === input.mention || persona.displayName === input.mention)
     : undefined

@@ -23,10 +23,14 @@ describe('verifyQuote', () => {
     expect(verifyQuote('「补丁摞补丁」', block.paragraphs, 1)).toBe(true)
   })
 
-  it('rejects quotes that appear only later, or are too short or long', () => {
+  it('rejects quotes that appear only later, are too short, or are not in the text', () => {
     expect(verifyQuote('他决定出远海', block.paragraphs, 2)).toBe(false)
     expect(verifyQuote('帆', block.paragraphs, 1)).toBe(false)
     expect(verifyQuote('八十多天一条鱼都没有，帆上补丁摞补丁。还要再写很长', block.paragraphs, 1)).toBe(false)
+  })
+
+  it('accepts a long quote when it is a continuous span of the text', () => {
+    expect(verifyQuote('八十多天一条鱼都没有，帆上补丁摞补丁。', block.paragraphs, 1)).toBe(true)
   })
 
   it('extracts wrapped quotes from comment text', () => {

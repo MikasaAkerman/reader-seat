@@ -26,7 +26,16 @@
       <div v-if="talk.residentLines.length" class="talk__block">
         <h3><VanIcon name="comment-o" />书友一句话</h3>
         <p v-for="(line, index) in talk.residentLines" :key="index">
-          <strong>{{ line.role }}</strong>{{ line.text }}
+          <strong>{{ line.role }}</strong>
+          <button
+            v-if="line.folded && !openedLines[index]"
+            type="button"
+            class="talk__fold"
+            @click="openedLines[index] = true"
+          >
+            可能有剧透，展开
+          </button>
+          <template v-else>{{ line.text }}</template>
         </p>
       </div>
       <div v-if="talk.debates.length" class="talk__block">
@@ -105,6 +114,7 @@ const emit = defineEmits<{
   submit: [payload: { judgment: string; evidence: string; reservation: string }]
 }>()
 
+const openedLines = ref<Record<number, boolean>>({})
 const judgment = ref('')
 const evidence = ref('')
 const reservation = ref('')
@@ -150,6 +160,16 @@ function submit() {
   margin: 0 0 var(--rs-space-2);
   font-size: var(--rs-text-lg);
   font-weight: 600;
+}
+
+.talk__fold {
+  margin-left: var(--rs-space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rs-accent);
+  font: inherit;
+  cursor: pointer;
 }
 
 .talk__locked {

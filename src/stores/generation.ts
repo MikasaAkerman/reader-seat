@@ -10,7 +10,7 @@ import {
   resolvePredictions,
   snapshotForPrompt,
 } from '@/core/memory'
-import { briefLineup, fullLineup, pickRepliers, samplePassersby, voiceSamplesOf } from '@/core/personas'
+import { briefLineup, dialogueSpeaker, fullLineup, pickRepliers, samplePassersby, voiceSamplesOf } from '@/core/personas'
 import { canReroll, latestBatch, nextBatchNo, rowsToCarry } from '@/core/comments/batches'
 import {
   assignObservations,
@@ -22,6 +22,7 @@ import {
   runChapterTalk,
   runDeep,
   runDeepPlan,
+  runDialogue,
   runLiveReply,
   runObserve,
   runPasserbyBatch,
@@ -118,6 +119,15 @@ function errorText(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
 }
 
+function dropNotice(dropped: DroppedCounts, fallback: string): string {
+  if (dropped.spoiler > 0) return '没能通过剧透校验'
+  if (dropped.entity > 0) return '提到了还没读到的名字'
+  if (dropped.quote > 0) return '引文对不上原文'
+  if (dropped.outside > 0) return '用了文本外的情节'
+  if (dropped.duplicate > 0) return '和已有评论太像'
+  return fallback
+}
+
 function findComment(threads: ReaderThread[], id: string) {
   for (const thread of threads) {
     if (thread.id === id) return thread
@@ -127,13 +137,19 @@ function findComment(threads: ReaderThread[], id: string) {
   return undefined
 }
 
-function commentFrom(comment: RefineComment): StoredComment {
+type FoldedThread<T extends { root: RefineComment; replies: RefineComment[] }> = Omit<T, 'root' | 'replies'> & {
+  root: RefineComment & { folded?: boolean }
+  replies: Array<RefineComment & { folded?: boolean }>
+}
+
+function commentFrom(comment: RefineComment & { folded?: boolean }): StoredComment {
   const resident = comment.author_type === 'resident'
   return {
     authorType: comment.author_type,
     displayName: resident ? comment.reader_role || comment.display_name || '书友' : comment.display_name || '路人',
     role: comment.reader_role || '',
     text: comment.text,
+    ...(comment.folded ? { folded: true } : {}),
   }
 }
 
@@ -634,7 +650,7 @@ export const useGenerationStore = defineStore('generation', () => {
       )
       if (signal.aborted) return
       if (!threads || threads.length === 0) {
-        // 校验没过或全被拦下：保留粗评那条占位，不清空这一段。
+        // 严格档校验请求失败，或精修本身没写出评论：保留粗评占位。
         await markParagraph(row.id, 'rough', 3)
       } else {
         await saveParagraphComments(
@@ -659,8 +675,9 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   /**
-   * 二次剧透校验。返回 null 表示严格档位下校验本身失败，调用方应当不采用这批结果。
-   * 严格档位下，校验结果里漏掉的评论也按不通过处理。
+   * 二次剧透校验。返回 null 表示严格档位下校验请求失败，调用方应当不采用这批结果。
+   * 某一条没通过时不丢弃，给它标上 folded，界面默认折叠。
+   * 严格档位下，校验结果里漏掉的评论也按不通过、折叠处理。
    */
   async function withoutSpoilers<T extends { root: RefineComment; replies: RefineComment[] }>(
     bookId: string,
@@ -670,7 +687,8 @@ export const useGenerationStore = defineStore('generation', () => {
     threads: T[],
     client: LlmClient,
     signal: AbortSignal,
-  ): Promise<T[] | null> {
+  ): Promise<Array<FoldedThread<T>> | null> {
+    if (spoilerLevel === '全开放') return threads
     const strict = spoilerLevel === '严格'
     const tagged = threads.map((thread, threadIndex) => ({
       rootId: `r${threadIndex}`,
@@ -686,14 +704,17 @@ export const useGenerationStore = defineStore('generation', () => {
     try {
       const checked = await runSpoilerCheck({ spoilerLevel, priorSummary: prior, text, comments }, client, signal)
       if (!signal.aborted) await log(bookId, 'spoilerCheck', true, checked.usage, undefined, Date.now() - started)
-      return tagged
-        .filter((item) => commentPasses(item.rootId, checked.results, strict))
-        .map((item) => ({
-          ...item.thread,
-          replies: item.thread.replies.filter((_, replyIndex) =>
-            commentPasses(item.replyIds[replyIndex] ?? '', checked.results, strict),
-          ),
-        }))
+      return tagged.map((item) => ({
+        ...item.thread,
+        root: {
+          ...item.thread.root,
+          ...(commentPasses(item.rootId, checked.results, strict) ? {} : { folded: true as const }),
+        },
+        replies: item.thread.replies.map((reply, replyIndex) => ({
+          ...reply,
+          ...(commentPasses(item.replyIds[replyIndex] ?? '', checked.results, strict) ? {} : { folded: true as const }),
+        })),
+      }))
     } catch (err) {
       if (isAbort(err) || signal.aborted) return null
       await log(bookId, 'spoilerCheck', false, EMPTY_USAGE, errorText(err, '校验失败'), Date.now() - started)
@@ -701,8 +722,8 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  /** 单条评论的剧透校验（换一批、本章说），返回通过的下标。 */
-  async function passingIndexes(
+  /** 单条评论的剧透校验。blocked 表示严格档请求失败；folded 是应折叠的下标。 */
+  async function spoilerMarks(
     bookId: string,
     spoilerLevel: string,
     prior: string,
@@ -710,17 +731,20 @@ export const useGenerationStore = defineStore('generation', () => {
     lines: string[],
     client: LlmClient,
     signal: AbortSignal,
-  ): Promise<Set<number>> {
-    const all = new Set(lines.map((_, index) => index))
-    if (spoilerLevel !== '严格' || lines.length === 0) return all
-    const threads = lines.map((line) => ({
+  ): Promise<{ blocked: boolean; folded: Set<number> }> {
+    const clear = { blocked: false, folded: new Set<number>() }
+    if (spoilerLevel !== '严格' || lines.length === 0) return clear
+    const threads = lines.map((line, index) => ({
+      index,
       root: { author_type: 'resident' as const, text: line, uses_outside_plot: false },
       replies: [] as RefineComment[],
-      index: 0,
     }))
-    threads.forEach((thread, index) => (thread.index = index))
     const kept = await withoutSpoilers(bookId, spoilerLevel, prior, text, threads, client, signal)
-    return new Set((kept ?? []).map((thread) => thread.index))
+    if (!kept) return { blocked: true, folded: new Set() }
+    return {
+      blocked: false,
+      folded: new Set(kept.flatMap((thread) => (thread.root.folded ? [thread.index] : []))),
+    }
   }
 
   async function postComment(input: { paragraphId: string; text: string; parentId?: string; mention?: string }) {
@@ -796,14 +820,49 @@ export const useGenerationStore = defineStore('generation', () => {
         })),
       ])
       const replyTo = findComment(threads, request.parentId)
+      const parent = replyTo && replyTo.authorType !== 'user' ? replyTo : undefined
       const lineup = lineupFor(book.spoilerLevel, book.lineup)
-      const repliers = pickRepliers({
-        lineup,
-        spoken,
-        mention: request.mention,
-        replyTo: replyTo && replyTo.authorType !== 'user' ? replyTo : undefined,
-      })
       const client = settings.createClient()
+      const known = new Set(memory.entities.filter((name) => !later.includes(name)))
+      if (!request.mention) {
+        const speaker = dialogueSpeaker(lineup, parent)
+        const generated = await runDialogue(
+          {
+            title: book.title,
+            spoilerLevel: book.spoilerLevel,
+            memorySnapshot: snapshot,
+            priorSummary: prior,
+            textUntilHere: formatBlock(block),
+            userText: request.text,
+            parentText: parent?.text,
+            speakerName: speaker.displayName,
+            speakerVoice: speaker.voice,
+          },
+          client,
+          block,
+          known,
+          signal,
+          later,
+        )
+        if (signal.aborted) return
+        const answered = Boolean(generated.text)
+        if (generated.text) {
+          await appendComment(
+            request.paragraphId,
+            {
+              authorType: speaker.authorType,
+              displayName: speaker.displayName,
+              role: speaker.role,
+              text: generated.text,
+            },
+            request.parentId,
+          )
+        }
+        replyFailed.value = !answered
+        await log(book.id, 'live', answered, generated.usage, answered ? undefined : '没有接上话', Date.now() - started)
+        return
+      }
+      const repliers = pickRepliers({ lineup, spoken, mention: request.mention, replyTo: parent })
       let gotReply = false
       let accepted = 0
       const limit = Math.max(repliers.length, 1)
@@ -816,7 +875,7 @@ export const useGenerationStore = defineStore('generation', () => {
           priorSummary: prior,
           textUntilHere: formatBlock(block),
           userText: request.text,
-          parentText: replyTo && replyTo.authorType !== 'user' ? replyTo.text : undefined,
+          parentText: parent?.text,
           repliers: repliers.map((person) => ({
             role: person.role,
             displayName: person.displayName,
@@ -825,7 +884,7 @@ export const useGenerationStore = defineStore('generation', () => {
         },
         client,
         block,
-        new Set(memory.entities.filter((name) => !later.includes(name))),
+        known,
         (reply) => {
           if (accepted >= limit) return
           accepted += 1
@@ -897,7 +956,7 @@ export const useGenerationStore = defineStore('generation', () => {
       )
       if (signal.aborted) return
       const lines = result.resident_lines.filter((line) => line.text.trim())
-      const passing = await passingIndexes(
+      const marks = await spoilerMarks(
         book.id,
         book.spoilerLevel,
         usable ? memory.synopsis : '',
@@ -937,9 +996,13 @@ export const useGenerationStore = defineStore('generation', () => {
         chapterId: chapter.id,
         paragraphId: '',
         hotParagraphIds,
-        residentLines: lines
-          .filter((_, index) => passing.has(index))
-          .map((line) => ({ role: line.reader_role, text: line.text })),
+        residentLines: marks.blocked
+          ? []
+          : lines.map((line, index) => ({
+              role: line.reader_role,
+              text: line.text,
+              ...(marks.folded.has(index) ? { folded: true } : {}),
+            })),
         debates: result.debates.filter((item) => item.topic.trim() || item.summary.trim()),
         predictionUpdates: result.prediction_updates
           .filter((item) => item.prediction_id || item.status)
@@ -1001,7 +1064,9 @@ export const useGenerationStore = defineStore('generation', () => {
           kind: 'deep',
           key: spot.id,
           distance: Math.max(0, spot.endOrder - order),
-          run: (signal) => generateDeep(spot.id, place, signal),
+          run: async (signal) => {
+            await generateDeep(spot.id, place, signal)
+          },
         })
       }
     })
@@ -1068,7 +1133,12 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function generateDeep(spotId: string, place: Place, signal: AbortSignal, sceneEnd?: ParagraphRow) {
+  async function generateDeep(
+    spotId: string,
+    place: Place,
+    signal: AbortSignal,
+    sceneEnd?: ParagraphRow,
+  ): Promise<string | undefined> {
     const started = Date.now()
     const settings = useSettingsStore()
     try {
@@ -1077,7 +1147,7 @@ export const useGenerationStore = defineStore('generation', () => {
       const spot = spots.find((item) => item.id === spotId)
       const rows = await listParagraphs(place.chapterId)
       const end = sceneEnd ?? rows.find((row) => row.id === spot?.endParagraphId)
-      if (!book || !end) return
+      if (!book || !end) return '这一段没有正文'
       if (spot?.status === 'done' && !sceneEnd) return
       const startOrder = spot?.startOrder ?? Math.max(1, end.order - 20)
       const sceneRows = tailWithin(
@@ -1129,7 +1199,7 @@ export const useGenerationStore = defineStore('generation', () => {
         await log(book.id, 'deep', false, generated.usage, '长评未通过校验', Date.now() - started, {
           dropped: generated.dropped,
         })
-        return
+        return dropNotice(generated.dropped, '长评没写出来')
       }
       const data = generated.result
       const thesisAuthor = lineup.find((persona) => persona.role === data.thesis.author) ?? lineup.find((persona) => persona.role === '课代表') ?? lineup[0]
@@ -1177,17 +1247,30 @@ export const useGenerationStore = defineStore('generation', () => {
         await log(book.id, 'deep', false, generated.usage, '长评未过剧透校验', Date.now() - started, {
           dropped: generated.dropped,
         })
-        return
+        return '没能通过剧透校验'
       }
-      await replacePinned(end.id, 'deep', threads)
+      const verdict = checked[0]!
+      await replacePinned(end.id, 'deep', [
+        {
+          ...threads[0]!,
+          ...(verdict.root.folded ? { folded: true } : {}),
+          replies: threads[0]!.replies.map((reply, index) => ({
+            ...reply,
+            ...(verdict.replies[index]?.folded ? { folded: true } : {}),
+          })),
+        },
+      ])
       if (spot) await updateDeepSpot(spot.id, { status: 'done' })
       await log(book.id, 'deep', true, generated.usage, undefined, Date.now() - started, {
         dropped: generated.dropped,
       })
       if (place.chapterId === currentChapterId) await refresh(place.chapterId)
+      return '长评写好了'
     } catch (err) {
       if (isAbort(err) || signal.aborted) return
-      await log(place.bookId, 'deep', false, EMPTY_USAGE, errorText(err, '深读长评失败'), Date.now() - started)
+      const message = errorText(err, '深读长评失败')
+      await log(place.bookId, 'deep', false, EMPTY_USAGE, message, Date.now() - started)
+      return message
     }
   }
 
@@ -1226,13 +1309,13 @@ export const useGenerationStore = defineStore('generation', () => {
       createdAt: new Date().toISOString(),
     }
     await saveDeepSpots([spot])
-    scheduler.enqueue({
-      kind: 'deep',
-      key: spot.id,
-      distance: 0,
-      run: (signal) => generateDeep(spot.id, place, signal, row),
-    })
-    notice.value = '开始写长评'
+    const controller = new AbortController()
+    sideCalls.add(controller)
+    try {
+      notice.value = (await generateDeep(spot.id, place, controller.signal, row)) || ''
+    } finally {
+      sideCalls.delete(controller)
+    }
   }
 
   async function fetchBackground(paragraphId: string) {
@@ -1277,13 +1360,13 @@ export const useGenerationStore = defineStore('generation', () => {
       )
       if (controller.signal.aborted) return
       if (!generated.result) {
-        notice.value = '这条背景没能通过校验'
+        notice.value = dropNotice(generated.dropped, '没查到背景')
         await log(book.id, 'background', false, generated.usage, '背景未通过校验', Date.now() - started, {
           dropped: generated.dropped,
         })
         return
       }
-      const passing = await passingIndexes(
+      const marks = await spoilerMarks(
         book.id,
         book.spoilerLevel,
         prior,
@@ -1293,9 +1376,9 @@ export const useGenerationStore = defineStore('generation', () => {
         controller.signal,
       )
       if (controller.signal.aborted) return
-      if (!passing.has(0)) {
+      if (marks.blocked) {
         generated.dropped.spoiler += 1
-        notice.value = '这条背景没能通过校验'
+        notice.value = '没能通过剧透校验'
         await log(book.id, 'background', false, generated.usage, '背景未过剧透校验', Date.now() - started, {
           dropped: generated.dropped,
         })
@@ -1308,6 +1391,7 @@ export const useGenerationStore = defineStore('generation', () => {
           role: '考据癖',
           text: generated.result.text,
           kind: 'background',
+          ...(marks.folded.has(0) ? { folded: true } : {}),
         },
       ])
       await log(book.id, 'background', true, generated.usage, undefined, Date.now() - started, {
@@ -1316,7 +1400,7 @@ export const useGenerationStore = defineStore('generation', () => {
       await refresh(place.chapterId)
     } catch (err) {
       if (isAbort(err) || controller.signal.aborted) return
-      notice.value = '没查到背景'
+      notice.value = errorText(err, '查背景失败')
       await log(place.bookId, 'background', false, EMPTY_USAGE, errorText(err, '查背景失败'), Date.now() - started)
     } finally {
       sideCalls.delete(controller)
@@ -1345,7 +1429,11 @@ export const useGenerationStore = defineStore('generation', () => {
 
   async function reroll(paragraphId: string) {
     rerollMessage.value = ''
-    if (!allowShort || needsKey.value || !currentBookId) return
+    if (!allowShort) return
+    if (needsKey.value || !currentBookId) {
+      rerollMessage.value = '先去设置里填写 API Key'
+      return
+    }
     const place = here()
     const batches = await listBatches(paragraphId)
     if (!canReroll(batches, new Date())) {
@@ -1356,8 +1444,11 @@ export const useGenerationStore = defineStore('generation', () => {
     const rows = await listParagraphs(place.chapterId)
     const paragraph = rows.find((item) => item.id === paragraphId)
     const book = await getBook(place.bookId)
-    if (!latest || !paragraph || !book) return
-    const carried = rowsToCarry(await commentsInBatch(latest.id))
+    if (!paragraph || !book) {
+      rerollMessage.value = '这一段没有正文'
+      return
+    }
+    const carried = latest ? rowsToCarry(await commentsInBatch(latest.id)) : []
     const controller = new AbortController()
     sideCalls.add(controller)
     const started = Date.now()
@@ -1400,7 +1491,7 @@ export const useGenerationStore = defineStore('generation', () => {
       const candidates = result.comments.filter(
         (comment) => allowed.has(comment.text) && !isNearDuplicate(comment.text, existing),
       )
-      const passing = await passingIndexes(
+      const marks = await spoilerMarks(
         book.id,
         book.spoilerLevel,
         prior,
@@ -1410,12 +1501,17 @@ export const useGenerationStore = defineStore('generation', () => {
         controller.signal,
       )
       if (controller.signal.aborted) return
-      const fresh = candidates.filter((_, index) => passing.has(index))
-      if (fresh.length === 0) {
-        rerollMessage.value = '没换成新的一批'
+      if (marks.blocked || candidates.length === 0) {
+        const namedLater = result.comments.some((comment) => !allowed.has(comment.text))
+        rerollMessage.value = namedLater
+          ? '提到了还没读到的名字'
+          : marks.blocked
+            ? '没能通过剧透校验'
+            : '没换成新的一批'
         await log(book.id, 'live', false, result.usage, '换一批全被拦下', Date.now() - started)
         return
       }
+      const fresh = candidates
       let seq = carried.reduce((max, row) => Math.max(max, row.seq ?? 0), -1) + 1
       const passers = fresh.map((comment, index) => ({
         id: createId(),
@@ -1427,13 +1523,14 @@ export const useGenerationStore = defineStore('generation', () => {
         role: '',
         text: comment.text,
         seq: seq++,
+        ...(marks.folded.has(index) ? { folded: true } : {}),
       }))
       await saveNextBatch(paragraphId, nextBatchNo(batches), [...carried, ...passers])
       await log(book.id, 'live', true, result.usage, undefined, Date.now() - started)
       await refresh(place.chapterId)
     } catch (err) {
       if (isAbort(err) || controller.signal.aborted) return
-      rerollMessage.value = '没换成新的一批'
+      rerollMessage.value = errorText(err, '换一批失败')
       await log(book.id, 'live', false, EMPTY_USAGE, errorText(err, '换一批失败'), Date.now() - started)
     } finally {
       sideCalls.delete(controller)

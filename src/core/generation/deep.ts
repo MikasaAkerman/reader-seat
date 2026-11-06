@@ -34,6 +34,15 @@ function evidenceOk(result: DeepResult, block: TextBlock, upTo: number): boolean
   return passed.length >= 2
 }
 
+function plusUsage(left: LlmUsage, right: LlmUsage): LlmUsage {
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    cacheHitTokens: left.cacheHitTokens + right.cacheHitTokens,
+    reasoningTokens: left.reasoningTokens + right.reasoningTokens,
+  }
+}
+
 export async function runDeep(
   ctx: DeepPromptContext,
   block: TextBlock,
@@ -44,21 +53,30 @@ export async function runDeep(
   reasoning: ReasoningMode = 'high',
 ): Promise<{ result: DeepResult | null; usage: LlmUsage; dropped: DroppedCounts }> {
   const dropped = emptyDropped()
-  const { data, usage } = await client.chatJson(buildDeepPrompt(ctx), deepResultSchema, {
-    maxTokens: 8000,
-    timeoutMs: 240_000,
-    reasoning,
-    signal,
-  })
   const upTo = block.paragraphs.length
+  const ask = () =>
+    client.chatJson(buildDeepPrompt(ctx), deepResultSchema, {
+      maxTokens: 16000,
+      timeoutMs: 240_000,
+      reasoning,
+      signal,
+    })
+  const first = await ask()
+  let usage = first.usage
+  let data = first.data
+  if (!data.thesis.body.trim() || !evidenceOk(data, block, upTo)) {
+    const second = await ask()
+    usage = plusUsage(usage, second.usage)
+    data = second.data
+  }
   if (!data.thesis.body.trim() || !evidenceOk(data, block, upTo)) {
     dropped.quote += 1
     return { result: null, usage, dropped }
   }
-  const texts = [data.thesis.body, data.rebuttal?.body ?? '', data.background]
-  for (const text of texts) {
+  const extras = data.thesis.evidence.map((item) => item.quote)
+  const quote = extras[0] || ''
+  for (const text of [data.thesis.body, data.rebuttal?.body ?? '']) {
     if (!text.trim()) continue
-    const quote = data.thesis.evidence[0]?.quote || ''
     const gate = gateComment({
       text,
       quote,
@@ -68,12 +86,26 @@ export async function runDeep(
       newEntities,
       usesOutsidePlot: false,
       corpus: [],
-      extras: data.thesis.evidence.map((item) => item.quote),
+      extras,
     })
     if (!gate.ok && gate.reason !== 'quote') {
       dropped[gate.reason] += 1
       return { result: null, usage, dropped }
     }
+  }
+  if (data.background.trim()) {
+    const gate = gateComment({
+      text: data.background,
+      quote,
+      paragraphIndex: upTo,
+      block,
+      knownEntities,
+      newEntities,
+      usesOutsidePlot: false,
+      corpus: [],
+      extras,
+    })
+    if (!gate.ok) data = { ...data, background: '' }
   }
   return { result: data, usage, dropped }
 }
