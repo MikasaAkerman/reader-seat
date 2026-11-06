@@ -30,6 +30,14 @@ export interface BookRow {
   unlockMode: UnlockMode
   /** 章末微评输入是否默认展开。缺省为展开。 */
   microReviewOpen?: boolean
+  /** 是否生成段评。缺省为开。 */
+  shortComments?: boolean
+  /** 是否生成深读长评。缺省为开。 */
+  longComments?: boolean
+  /** 每章长评下限。缺省 1。 */
+  deepMinPerChapter?: number
+  /** 每章长评上限。缺省 1。 */
+  deepMaxPerChapter?: number
   lineup: Record<string, boolean>
   createdAt: string
   updatedAt: string

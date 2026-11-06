@@ -69,13 +69,8 @@ vi.mock('@/stores/settings', () => ({
     model: 'test',
     chapterReasoning: false,
     pricing: { inputHitPerMTok: 0, inputMissPerMTok: 0, outputPerMTok: 0 },
-    deepPerChapter: 0,
-    deepReasoning: 'high',
-    deepPricing: { inputHitPerMTok: 0, inputMissPerMTok: 0, outputPerMTok: 0 },
-    deepModelName: () => 'test',
     load: async () => {},
     createClient: fakeClient,
-    createDeepClient: fakeClient,
   }),
 }))
 
@@ -92,6 +87,7 @@ const book: BookRow = {
   station: null,
   spoilerLevel: '全开放',
   unlockMode: 'free',
+  longComments: false,
   lineup: {},
   createdAt: '2026-11-04T00:00:00.000Z',
   updatedAt: '2026-11-04T00:00:00.000Z',
@@ -298,6 +294,31 @@ describe('generation store', () => {
     await vi.waitFor(async () => expect((await db.paragraphs.get('p2'))?.genStatus).toBe('rough'))
     expect((await listThreads('p2')).map((thread) => thread.text)).toEqual(['占位'])
     expect(fake.calls).toContain('spoiler')
+  })
+
+  it('does not generate short comments when the book turns them off', async () => {
+    await db.books.update('book', { shortComments: false })
+    await db.paragraphs.bulkAdd([paragraph(1), paragraph(2)])
+    await startStore()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(fake.calls).not.toContain('observe')
+    expect(fake.calls).not.toContain('jsonl')
+    expect((await db.paragraphs.get('p1'))?.genStatus).toBe('none')
+  })
+
+  it('does not plan a long comment when the book turns them off', async () => {
+    await db.paragraphs.bulkAdd([paragraph(1, { genStatus: 'rough', score: 1 })])
+    await startStore()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(fake.calls).not.toContain('deepPlan')
+  })
+
+  it('plans a long comment between the book minimum and maximum', async () => {
+    await db.books.update('book', { longComments: true, deepMinPerChapter: 1, deepMaxPerChapter: 2 })
+    await db.paragraphs.bulkAdd([paragraph(1, { genStatus: 'rough', score: 1 })])
+    await startStore()
+    await vi.waitFor(() => expect(fake.calls).toContain('deepPlan'))
+    expect(fake.prompts.some((prompt) => prompt.includes('选出 1 到 2 处'))).toBe(true)
   })
 
   it('allows five interesting marks per chapter', async () => {

@@ -52,6 +52,7 @@
             <IconButton icon="arrow" label="下一批" :disabled="batchNo >= batchCount" @click="emit('batch', 1)" />
           </div>
           <IconButton
+            v-if="allowReroll"
             class="panel__reroll"
             icon="replay"
             :label="rerollsLeft > 0 ? `换一批（今天还剩 ${rerollsLeft} 次）` : '换一批（今天已用完）'"
@@ -64,7 +65,7 @@
           <IconButton icon="info-o" label="查背景" variant="muted" @click="emit('background')">
             <span class="panel__reroll-text">查背景</span>
           </IconButton>
-          <IconButton icon="notes-o" label="深入聊聊" variant="muted" @click="emit('deep')">
+          <IconButton v-if="allowDeep" icon="notes-o" label="深入聊聊" variant="muted" @click="emit('deep')">
             <span class="panel__reroll-text">深入聊聊</span>
           </IconButton>
         </div>
@@ -148,6 +149,8 @@ const props = withDefaults(
     batchCount?: number
     rerollsLeft?: number
     rerollMessage?: string
+    allowReroll?: boolean
+    allowDeep?: boolean
   }>(),
   {
     locked: false,
@@ -155,6 +158,8 @@ const props = withDefaults(
     batchCount: 0,
     rerollsLeft: 3,
     rerollMessage: '',
+    allowReroll: true,
+    allowDeep: true,
   },
 )
 

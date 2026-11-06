@@ -47,6 +47,8 @@ import {
   BUFFER_TARGET,
   COLD_BLOCK_PARAS,
   HOT_LIMIT,
+  deepSpotRange,
+  generatesShort,
   jumpBlock,
   lineupFor,
   planNextBlock,
@@ -185,6 +187,14 @@ export const useGenerationStore = defineStore('generation', () => {
   let smallFirst = false
   let refreshTimer: ReturnType<typeof setTimeout> | 0 = 0
   let lastLive: LiveRequest | null = null
+  let allowShort = true
+  let spotRange = { min: 1, max: 1 }
+
+  async function refreshGates(bookId: string) {
+    const book = await getBook(bookId)
+    allowShort = !book || generatesShort(book)
+    spotRange = book ? deepSpotRange(book) : { min: 1, max: 1 }
+  }
 
   function here(): Place {
     return { bookId: currentBookId, chapterId: currentChapterId }
@@ -243,6 +253,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
   async function sync(input: { bookId: string; chapterId: string; order: number }) {
     bind()
+    await refreshGates(input.bookId)
     const settings = useSettingsStore()
     if (!settings.loaded) await settings.load()
     needsKey.value = !settings.apiKey
@@ -280,7 +291,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function ensure(rows: ParagraphRow[], order: number, place: Place) {
-    if (needsKey.value || place.chapterId !== currentChapterId) return
+    if (!allowShort || needsKey.value || place.chapterId !== currentChapterId) return
     let covered = readyAhead(rows, order, inflight)
     if (covered >= BUFFER_LOW) {
       cold = false
@@ -309,6 +320,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function enqueueJump(rows: ParagraphRow[], order: number, place: Place) {
+    if (!allowShort) return
     const block = jumpBlock(rows, order, inflight)
     if (block.length === 0) return
     for (const row of block) inflight.add(row.id)
@@ -324,6 +336,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
   /** 精修排过队但没跑完（切章、跳读、重启）的热段，重新入队。调度器按 key 去重。 */
   function recoverRefining(rows: ParagraphRow[], place: Place) {
+    if (!allowShort) return
     for (const row of rows) {
       if (row.genStatus !== 'refining') continue
       enqueueRefine(row, place, row.userMarked === 'interesting' ? '读者标记为有意思' : '粗评分为 3')
@@ -331,6 +344,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   async function retry(paragraphId: string) {
+    if (!allowShort) return
     const place = here()
     const rows = await listParagraphs(place.chapterId)
     const row = rows.find((item) => item.id === paragraphId)
@@ -733,6 +747,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function enqueueReply(request: LiveRequest) {
+    if (!allowShort) return
     replying.value = true
     scheduler.enqueue({
       kind: 'live',
@@ -950,7 +965,6 @@ export const useGenerationStore = defineStore('generation', () => {
     extra: { dropped?: DroppedCounts; model?: string } = {},
   ) {
     const settings = useSettingsStore()
-    const deep = type === 'deep'
     await writeGenerationLog({
       bookId,
       type,
@@ -959,11 +973,11 @@ export const useGenerationStore = defineStore('generation', () => {
       completionTokens: usage.completionTokens,
       cacheHitTokens: usage.cacheHitTokens,
       reasoningTokens: usage.reasoningTokens,
-      cost: estimateCost(usage, deep ? settings.deepPricing : settings.pricing),
+      cost: estimateCost(usage, settings.pricing),
       error,
       latencyMs,
       dropped: extra.dropped,
-      model: extra.model || (deep ? settings.deepModelName() : settings.model),
+      model: extra.model || settings.model,
     })
   }
 
@@ -972,8 +986,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function enqueueDeepWork(rows: ParagraphRow[], place: Place, order: number) {
-    const settings = useSettingsStore()
-    if (settings.deepPerChapter <= 0 || needsKey.value) return
+    if (spotRange.max <= 0 || needsKey.value) return
     scheduler.enqueue({
       kind: 'deep',
       key: `plan:${place.chapterId}`,
@@ -998,12 +1011,12 @@ export const useGenerationStore = defineStore('generation', () => {
     const existing = await listDeepSpots(place.chapterId)
     if (existing.length > 0) return
     const settings = useSettingsStore()
-    const maxSpots = settings.deepPerChapter
-    if (maxSpots <= 0) return
     const started = Date.now()
     try {
       const book = await getBook(place.bookId)
       if (!book || signal.aborted) return
+      const range = deepSpotRange(book)
+      if (range.max <= 0) return
       const memory = await readMemory(book.id)
       const chapters = await listChapters(place.bookId)
       const chapter = chapters.find((item) => item.id === place.chapterId)
@@ -1016,7 +1029,8 @@ export const useGenerationStore = defineStore('generation', () => {
           synopsis: memory.synopsisThrough >= 0 && memory.synopsisThrough < (chapter?.order ?? 0) ? memory.synopsis : '',
           priorSummary: await priorSummary(place, memory),
           readText: chapterDigest(rows, CONTEXT_BUDGET.chapterTalkFull),
-          maxSpots,
+          minSpots: range.min,
+          maxSpots: range.max,
           stationLens: stationLensOf(book.station),
         },
         client,
@@ -1088,7 +1102,7 @@ export const useGenerationStore = defineStore('generation', () => {
         .map((passage) => (passage.chapterTitle ? `《${passage.chapterTitle}》${passage.text}` : passage.text))
         .join('\n')
       const lineup = lineupFor(book.spoilerLevel, book.lineup)
-      const client = settings.createDeepClient()
+      const client = settings.createClient()
       const generated = await runDeep(
         {
           title: book.title,
@@ -1108,14 +1122,12 @@ export const useGenerationStore = defineStore('generation', () => {
         new Set(memory.entities.filter((name) => !later.includes(name))),
         later,
         signal,
-        settings.deepReasoning,
       )
       if (signal.aborted) return
       if (!generated.result) {
         if (spot) await updateDeepSpot(spot.id, { status: 'failed' })
         await log(book.id, 'deep', false, generated.usage, '长评未通过校验', Date.now() - started, {
           dropped: generated.dropped,
-          model: settings.deepModelName(),
         })
         return
       }
@@ -1164,7 +1176,6 @@ export const useGenerationStore = defineStore('generation', () => {
         if (spot) await updateDeepSpot(spot.id, { status: 'failed' })
         await log(book.id, 'deep', false, generated.usage, '长评未过剧透校验', Date.now() - started, {
           dropped: generated.dropped,
-          model: settings.deepModelName(),
         })
         return
       }
@@ -1172,14 +1183,11 @@ export const useGenerationStore = defineStore('generation', () => {
       if (spot) await updateDeepSpot(spot.id, { status: 'done' })
       await log(book.id, 'deep', true, generated.usage, undefined, Date.now() - started, {
         dropped: generated.dropped,
-        model: settings.deepModelName(),
       })
       if (place.chapterId === currentChapterId) await refresh(place.chapterId)
     } catch (err) {
       if (isAbort(err) || signal.aborted) return
-      await log(place.bookId, 'deep', false, EMPTY_USAGE, errorText(err, '深读长评失败'), Date.now() - started, {
-        model: settings.deepModelName(),
-      })
+      await log(place.bookId, 'deep', false, EMPTY_USAGE, errorText(err, '深读长评失败'), Date.now() - started)
     }
   }
 
@@ -1188,6 +1196,11 @@ export const useGenerationStore = defineStore('generation', () => {
     const place = here()
     if (needsKey.value) {
       notice.value = '先去设置里填写 API Key'
+      return
+    }
+    const book = await getBook(place.bookId)
+    if (!book || deepSpotRange(book).max <= 0) {
+      notice.value = '这本书没有打开长评'
       return
     }
     const rows = await listParagraphs(place.chapterId)
@@ -1311,6 +1324,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   async function markInteresting(paragraphId: string) {
+    if (!allowShort) return
     notice.value = ''
     const place = here()
     const rows = await listParagraphs(place.chapterId)
@@ -1331,7 +1345,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
   async function reroll(paragraphId: string) {
     rerollMessage.value = ''
-    if (needsKey.value || !currentBookId) return
+    if (!allowShort || needsKey.value || !currentBookId) return
     const place = here()
     const batches = await listBatches(paragraphId)
     if (!canReroll(batches, new Date())) {

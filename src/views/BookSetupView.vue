@@ -5,7 +5,18 @@
     <form v-else class="setup__form" @submit.prevent="save">
       <h1 class="setup__title">{{ title }}</h1>
 
-      <VanCellGroup inset title="常驻书友">
+      <VanCellGroup inset>
+        <template #title>
+          <InfoTip text="打开后，阅读时按前方缓冲生成段评。关掉以后不再生成新的短评，已经写过的还在。">短评</InfoTip>
+        </template>
+        <VanCell title="生成短评" center>
+          <template #right-icon>
+            <VanSwitch v-model="shortOn" size="20px" aria-label="生成短评" />
+          </template>
+        </VanCell>
+      </VanCellGroup>
+
+      <VanCellGroup v-if="shortOn" inset title="常驻书友">
         <VanCell v-for="persona in lineup" :key="persona.role">
           <template #title>
             <InfoTip :text="persona.focus" :label="`${persona.displayName}关注什么`">
@@ -20,6 +31,27 @@
               :aria-label="`${persona.displayName}参与评论`"
               @update:model-value="setEnabled(persona.role, $event)"
             />
+          </template>
+        </VanCell>
+      </VanCellGroup>
+
+      <VanCellGroup inset>
+        <template #title>
+          <InfoTip text="打开后，每章按下限到上限挑选场景写长评。关掉以后不再生成，已经写过的还在。">长评</InfoTip>
+        </template>
+        <VanCell title="生成长评" center>
+          <template #right-icon>
+            <VanSwitch v-model="longOn" size="20px" aria-label="生成长评" />
+          </template>
+        </VanCell>
+        <VanCell v-if="longOn" title="每章下限" center>
+          <template #right-icon>
+            <VanStepper :model-value="deepMin" integer :min="1" aria-label="每章长评下限" @change="setDeepMin" />
+          </template>
+        </VanCell>
+        <VanCell v-if="longOn" title="每章上限" center>
+          <template #right-icon>
+            <VanStepper :model-value="deepMax" integer :min="1" aria-label="每章长评上限" @change="setDeepMax" />
           </template>
         </VanCell>
       </VanCellGroup>
@@ -98,11 +130,13 @@ import {
   Popup as VanPopup,
   Radio as VanRadio,
   RadioGroup as VanRadioGroup,
+  Stepper as VanStepper,
   Switch as VanSwitch,
   showToast,
   type PickerConfirmEventParams,
 } from 'vant'
 import InfoTip from '@/components/common/InfoTip.vue'
+import { commentCount } from '@/core/generation/pipeline'
 import { READING_STATIONS } from '@/core/stations'
 import { DEFAULT_LINEUP } from '@/core/personas'
 import type { SpoilerLevel, UnlockMode } from '@/core/types'
@@ -122,6 +156,10 @@ const missing = ref(false)
 const spoilerLevel = ref<SpoilerLevel>('严格')
 const unlockMode = ref<UnlockMode>('关闭')
 const microOpen = ref(true)
+const shortOn = ref(true)
+const longOn = ref(true)
+const deepMin = ref(1)
+const deepMax = ref(1)
 const station = ref(0)
 const pickerOpen = ref(false)
 const enabled = reactive<Record<string, boolean>>({})
@@ -138,12 +176,28 @@ onMounted(async () => {
   spoilerLevel.value = book.spoilerLevel
   unlockMode.value = book.unlockMode
   microOpen.value = book.microReviewOpen !== false
+  shortOn.value = book.shortComments !== false
+  longOn.value = book.longComments !== false
+  deepMin.value = commentCount(book.deepMinPerChapter)
+  deepMax.value = Math.max(deepMin.value, commentCount(book.deepMaxPerChapter))
   station.value = book.station ?? 0
   for (const persona of lineup) enabled[persona.role] = book.lineup[persona.role] !== false
 })
 
 function setEnabled(role: string, value: boolean) {
   enabled[role] = value
+}
+
+function setDeepMin(value: number | string) {
+  const next = commentCount(value)
+  deepMin.value = next
+  if (next > deepMax.value) deepMax.value = next
+}
+
+function setDeepMax(value: number | string) {
+  const next = commentCount(value)
+  deepMax.value = next
+  if (next < deepMin.value) deepMin.value = next
 }
 
 function setSpoiler(value: unknown) {
@@ -166,6 +220,10 @@ async function save() {
       spoilerLevel: spoilerLevel.value,
       unlockMode: unlockMode.value,
       microReviewOpen: microOpen.value,
+      shortComments: shortOn.value,
+      longComments: longOn.value,
+      deepMinPerChapter: deepMin.value,
+      deepMaxPerChapter: Math.max(deepMin.value, deepMax.value),
       station: station.value || null,
       lineup: { ...enabled },
     })

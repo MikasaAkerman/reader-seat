@@ -80,6 +80,8 @@
           :batch-count="comments.batchCount"
           :rerolls-left="comments.rerollsLeft"
           :reroll-message="generation.rerollMessage"
+          :allow-reroll="shortOn"
+          :allow-deep="longOn"
           @retry="onRetry(comments.activeId)"
           @retry-reply="generation.retryReply()"
           @reply="startReply"
@@ -124,6 +126,8 @@
         :batch-count="comments.batchCount"
         :rerolls-left="comments.rerollsLeft"
         :reroll-message="generation.rerollMessage"
+        :allow-reroll="shortOn"
+        :allow-deep="longOn"
         @retry="onRetry(comments.activeId)"
         @retry-reply="generation.retryReply()"
         @reply="startReply"
@@ -390,8 +394,12 @@ const openings = computed(() => {
   for (const paragraph of shown.value) map[paragraph.id] = paragraphOpening(paragraph.text)
   return map
 })
+const shortOn = computed(() => book.value?.shortComments !== false)
+const longOn = computed(() => book.value?.longComments !== false)
 const residents = computed(() =>
-  lineupFor(book.value?.spoilerLevel ?? '严格', book.value?.lineup).map((persona) => persona.role),
+  shortOn.value
+    ? lineupFor(book.value?.spoilerLevel ?? '严格', book.value?.lineup).map((persona) => persona.role)
+    : [],
 )
 
 onMounted(() => {

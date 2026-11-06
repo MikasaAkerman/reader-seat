@@ -17,6 +17,10 @@ export interface BookSettings {
   lineup: Record<string, boolean>
   station: number | null
   microReviewOpen?: boolean
+  shortComments?: boolean
+  longComments?: boolean
+  deepMinPerChapter?: number
+  deepMaxPerChapter?: number
 }
 
 export interface BookCard {
@@ -97,6 +101,10 @@ async function writeRows(bookId: string, parsed: ParsedBook, bytes: Uint8Array, 
     spoilerLevel: settings.spoilerLevel,
     unlockMode: settings.unlockMode,
     microReviewOpen: settings.microReviewOpen !== false,
+    shortComments: settings.shortComments !== false,
+    longComments: settings.longComments !== false,
+    deepMinPerChapter: settings.deepMinPerChapter,
+    deepMaxPerChapter: settings.deepMaxPerChapter,
     lineup: settings.lineup,
     createdAt,
     updatedAt: nowIso(),

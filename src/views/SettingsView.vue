@@ -16,25 +16,9 @@
         </VanCell>
       </VanCellGroup>
 
-      <VanCellGroup inset title="深度任务模型">
-        <VanField v-model="deepBaseUrl" label="接口地址" placeholder="留空则沿用主模型" />
-        <VanField v-model="deepModel" label="模型名" placeholder="留空则沿用主模型" />
-        <VanField v-model="deepApiKey" label="API Key" type="password" placeholder="留空则沿用主模型" />
-        <VanField v-model="deepReasoning" label="推理档位" placeholder="low / medium / high" />
-        <VanField v-model.number="deepPerChapter" type="number" label="每章长评" placeholder="0、1 或 2" />
-        <VanField v-model.number="deepPricing.inputHitPerMTok" type="number" label="深度输入命中" />
-        <VanField v-model.number="deepPricing.inputMissPerMTok" type="number" label="深度输入未命中" />
-        <VanField v-model.number="deepPricing.outputPerMTok" type="number" label="深度输出" />
-      </VanCellGroup>
-
       <div class="settings__actions">
         <VanButton type="primary" round :loading="saving" @click="onSave">保存</VanButton>
         <VanButton round plain type="primary" icon="exchange" :loading="testing" @click="onTest">测试连接</VanButton>
-      </div>
-      <div class="settings__actions">
-        <VanButton round plain type="primary" icon="exchange" :loading="testingDeep" @click="onTestDeep">
-          测试深度模型
-        </VanButton>
       </div>
       <div v-if="testResult" class="settings__test" role="status">
         <VanTag :type="testResult.jsonOk ? 'success' : 'danger'" plain round>
@@ -143,15 +127,8 @@ const model = ref('')
 const apiKey = ref('')
 const chapterReasoning = ref(true)
 const pricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
-const deepBaseUrl = ref('')
-const deepModel = ref('')
-const deepApiKey = ref('')
-const deepReasoning = ref('high')
-const deepPerChapter = ref(1)
-const deepPricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
 const saving = ref(false)
 const testing = ref(false)
-const testingDeep = ref(false)
 const testResult = ref<{ jsonOk: boolean; streamOk: boolean; detail?: string } | null>(null)
 const expanded = ref<string[]>([])
 const backupInput = ref<HTMLInputElement | null>(null)
@@ -178,12 +155,6 @@ onMounted(async () => {
   apiKey.value = settings.apiKey
   chapterReasoning.value = settings.chapterReasoning
   pricing.value = { ...settings.pricing }
-  deepBaseUrl.value = settings.deepBaseUrl
-  deepModel.value = settings.deepModel
-  deepApiKey.value = settings.deepApiKey
-  deepReasoning.value = settings.deepReasoning
-  deepPerChapter.value = settings.deepPerChapter
-  deepPricing.value = { ...settings.deepPricing }
   const [logs, cards] = await Promise.all([listGenerationLogs(), listBookCards()])
   const titles = Object.fromEntries(cards.map((card) => [card.id, card.title]))
   const summary = summarizeCosts(logs, titles)
@@ -215,7 +186,6 @@ function usePreset(name: keyof typeof PRICING_PRESETS) {
 }
 
 function formInput() {
-  const per = Number(deepPerChapter.value)
   return {
     baseUrl: baseUrl.value.trim(),
     model: model.value.trim(),
@@ -225,16 +195,6 @@ function formInput() {
       inputHitPerMTok: Number(pricing.value.inputHitPerMTok) || 0,
       inputMissPerMTok: Number(pricing.value.inputMissPerMTok) || 0,
       outputPerMTok: Number(pricing.value.outputPerMTok) || 0,
-    },
-    deepBaseUrl: deepBaseUrl.value.trim(),
-    deepModel: deepModel.value.trim(),
-    deepApiKey: deepApiKey.value.trim(),
-    deepReasoning: deepReasoning.value.trim() as 'low' | 'medium' | 'high',
-    deepPerChapter: per === 0 || per === 2 ? per : 1,
-    deepPricing: {
-      inputHitPerMTok: Number(deepPricing.value.inputHitPerMTok) || 0,
-      inputMissPerMTok: Number(deepPricing.value.inputMissPerMTok) || 0,
-      outputPerMTok: Number(deepPricing.value.outputPerMTok) || 0,
     },
   }
 }
@@ -309,23 +269,6 @@ async function onTest() {
   }
 }
 
-async function onTestDeep() {
-  testingDeep.value = true
-  testResult.value = null
-  try {
-    await settings.save(formInput())
-    const result = await settings.testDeepConnection()
-    testResult.value = { jsonOk: result.jsonOk, streamOk: result.streamOk, detail: `深度模型 ${result.detail}` }
-    if (result.jsonOk && result.streamOk) showSuccessToast('深度模型连通性测试通过')
-    else showFailToast('深度模型连通性测试未完全通过')
-  } catch (err) {
-    const message = err instanceof Error ? err.message : '测试失败'
-    testResult.value = { jsonOk: false, streamOk: false, detail: message }
-    showToast(message)
-  } finally {
-    testingDeep.value = false
-  }
-}
 </script>
 
 <style scoped lang="less">

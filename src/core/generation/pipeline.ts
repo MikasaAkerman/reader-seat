@@ -28,6 +28,29 @@ export interface PipelineComment {
   text: string
 }
 
+export function generatesShort(book: { shortComments?: boolean }): boolean {
+  return book.shortComments !== false
+}
+
+/** 不小于 1 的整数。非法值用缺省。 */
+export function commentCount(value: unknown, fallback = 1): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(1, Math.round(n))
+}
+
+/** 长评关闭时返回 0。否则下限不超过上限，缺省都是 1。 */
+export function deepSpotRange(book: {
+  longComments?: boolean
+  deepMinPerChapter?: number
+  deepMaxPerChapter?: number
+}): { min: number; max: number } {
+  if (book.longComments === false) return { min: 0, max: 0 }
+  const min = commentCount(book.deepMinPerChapter)
+  const max = Math.max(min, commentCount(book.deepMaxPerChapter))
+  return { min, max }
+}
+
 export function lineupFor(spoilerLevel: string, enabled: Record<string, boolean> = {}): ResidentPersona[] {
   return DEFAULT_LINEUP.filter((persona) => {
     if (enabled[persona.role] === false) return false

@@ -4,6 +4,9 @@ import {
   assignOne,
   COLD_BLOCK_PARAS,
   JUMP_BLOCK_PARAS,
+  commentCount,
+  deepSpotRange,
+  generatesShort,
   jumpBlock,
   lineupFor,
   planNextBlock,
@@ -80,6 +83,21 @@ describe('readyAhead', () => {
     ]
     expect(readyAhead(rows, 1)).toBe(2)
     expect(readyAhead(rows, 1, new Set(['p4']))).toBe(4)
+  })
+})
+
+describe('book comment gates', () => {
+  it('treats missing switches as on, and keeps the minimum from passing the maximum', () => {
+    expect(generatesShort({})).toBe(true)
+    expect(generatesShort({ shortComments: false })).toBe(false)
+    expect(deepSpotRange({})).toEqual({ min: 1, max: 1 })
+    expect(deepSpotRange({ longComments: false, deepMinPerChapter: 4, deepMaxPerChapter: 9 })).toEqual({
+      min: 0,
+      max: 0,
+    })
+    expect(deepSpotRange({ deepMinPerChapter: 4, deepMaxPerChapter: 2 })).toEqual({ min: 4, max: 4 })
+    expect(commentCount(2.6)).toBe(3)
+    expect(commentCount(0)).toBe(1)
   })
 })
 

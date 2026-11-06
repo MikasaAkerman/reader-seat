@@ -11,6 +11,7 @@ export interface DeepPlanPromptContext {
   synopsis?: string
   priorSummary?: string
   readText: string
+  minSpots: number
   maxSpots: number
   stationLens?: string
 }
@@ -35,7 +36,9 @@ export function buildDeepPlanPrompt(ctx: DeepPlanPromptContext): ChatMessage[] {
       role: 'system',
       content: [
         '你在为一部名著的评论区挑选真正值得深入讨论的场景。不要写评论。',
-        `最多选出 ${ctx.maxSpots} 处。没有值得深入的地方就返回空数组。`,
+        ctx.minSpots === ctx.maxSpots
+          ? `选出 ${ctx.maxSpots} 处。`
+          : `选出 ${ctx.minSpots} 到 ${ctx.maxSpots} 处，不要少于 ${ctx.minSpots}，不要多于 ${ctx.maxSpots}。`,
         '选对话或独白的收束处、转折、叙述手法集中的地方。start_pid 是场景开头，end_pid 是收束段，都用当前章的编号。',
         '不要选过渡、场面调度或单纯交代。',
         `提示词版本：${PROMPT_VERSION}`,

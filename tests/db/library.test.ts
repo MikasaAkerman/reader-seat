@@ -108,6 +108,23 @@ describe('library import', () => {
     })
     expect((await getBook(created.bookId))?.station).toBe(3)
     expect((await getBook(created.bookId))?.unlockMode).toBe('章末解锁')
+    expect((await getBook(created.bookId))?.shortComments).not.toBe(false)
+    await updateBookSettings(created.bookId, {
+      spoilerLevel: '全开放',
+      unlockMode: '章末解锁',
+      station: 3,
+      lineup: { 毒舌: false },
+      shortComments: false,
+      longComments: true,
+      deepMinPerChapter: 2,
+      deepMaxPerChapter: 5,
+    })
+    expect(await getBook(created.bookId)).toMatchObject({
+      shortComments: false,
+      longComments: true,
+      deepMinPerChapter: 2,
+      deepMaxPerChapter: 5,
+    })
 
     const chapter = await db.chapters.where('bookId').equals(created.bookId).first()
     await recordProgress(created.bookId, {
