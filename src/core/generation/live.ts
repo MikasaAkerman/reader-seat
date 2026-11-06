@@ -35,7 +35,7 @@ export async function runLiveReply(
         seen.push(reply.text)
         onReply(reply)
       },
-      { temperature: 0.7, maxTokens: 600, reasoning: 'off', signal },
+      { maxTokens: 600, reasoning: 'off', signal },
     ),
   }
 }

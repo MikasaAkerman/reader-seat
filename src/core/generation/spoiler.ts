@@ -27,7 +27,6 @@ export async function runSpoilerCheck(
   signal?: AbortSignal,
 ): Promise<SpoilerCheck & { usage: LlmUsage }> {
   const { data, usage } = await client.chatJson(buildSpoilerPrompt(ctx), spoilerCheckSchema, {
-    temperature: 0,
     maxTokens: 800,
     timeoutMs: 30_000,
     reasoning: 'off',

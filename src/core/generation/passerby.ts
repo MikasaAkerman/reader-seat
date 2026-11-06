@@ -22,7 +22,6 @@ export async function runPasserbyBatch(
   signal?: AbortSignal,
 ): Promise<PasserbyBatch & { usage: LlmUsage }> {
   const { data, usage } = await client.chatJson(buildPasserbyPrompt(ctx), passerbyBatchSchema, {
-    temperature: 0.8,
     maxTokens: 800,
     timeoutMs: 60_000,
     reasoning: 'off',

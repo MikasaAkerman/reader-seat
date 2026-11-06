@@ -16,7 +16,6 @@ export async function runBackground(
 ): Promise<{ result: BackgroundResult | null; usage: LlmUsage; dropped: DroppedCounts }> {
   const dropped = emptyDropped()
   const { data, usage } = await client.chatJson(buildBackgroundPrompt(ctx), backgroundResultSchema, {
-    temperature: 0.4,
     maxTokens: 400,
     timeoutMs: 45_000,
     reasoning: 'off',

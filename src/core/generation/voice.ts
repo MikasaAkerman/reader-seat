@@ -70,7 +70,6 @@ async function runOnce(
       onAccept(item)
     },
     {
-      temperature: 0.8,
       maxTokens: voiceMaxTokens(slots.length),
       timeoutMs: 90_000,
       firstItemMs: 30_000,

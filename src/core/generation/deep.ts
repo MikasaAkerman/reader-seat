@@ -11,7 +11,6 @@ export async function runDeepPlan(
   signal?: AbortSignal,
 ): Promise<DeepPlan & { usage: LlmUsage }> {
   const { data, usage } = await client.chatJson(buildDeepPlanPrompt(ctx), deepPlanSchema, {
-    temperature: 0.3,
     maxTokens: 800,
     timeoutMs: 60_000,
     reasoning: 'off',
@@ -46,7 +45,6 @@ export async function runDeep(
 ): Promise<{ result: DeepResult | null; usage: LlmUsage; dropped: DroppedCounts }> {
   const dropped = emptyDropped()
   const { data, usage } = await client.chatJson(buildDeepPrompt(ctx), deepResultSchema, {
-    temperature: 0.6,
     maxTokens: 8000,
     timeoutMs: 240_000,
     reasoning,

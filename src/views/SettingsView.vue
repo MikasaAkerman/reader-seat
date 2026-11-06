@@ -3,9 +3,10 @@
     <VanNavBar title="设置" left-arrow @click-left="goBack" />
     <div class="settings__body">
       <VanCellGroup inset title="模型">
+        <VanCell title="平台" :value="providerName" is-link @click="providerOpen = true" />
         <VanField v-model="baseUrl" label="接口地址" placeholder="https://api.deepseek.com" />
-        <VanField v-model="model" label="模型名" placeholder="deepseek-chat" />
         <VanField v-model="apiKey" label="API Key" type="password" placeholder="只保存在本机" />
+        <ModelCombo v-model="model" :options="modelOptions" :loading="listing" @refresh="onListModels" />
         <VanCell>
           <template #title>
             <InfoTip text="本章说在章末后台整理。开着更稳，但更慢，也更费 token。">本章说允许思考</InfoTip>
@@ -89,11 +90,35 @@
       </VanCellGroup>
       <input ref="backupInput" class="settings__file" type="file" accept="application/json,.json" @change="onRestore" />
     </div>
+
+    <VanPopup v-model:show="providerOpen" position="bottom" round>
+      <div class="settings__sheet">
+        <div class="settings__sheet-bar">
+          <button type="button" class="settings__sheet-action" @click="providerOpen = false">取消</button>
+          <strong>选择平台</strong>
+          <span class="settings__sheet-action" aria-hidden="true"></span>
+        </div>
+        <ul ref="providerList" class="settings__providers" role="listbox" aria-label="选择平台">
+          <li v-for="item in providerColumns" :key="item.value">
+            <button
+              type="button"
+              role="option"
+              :aria-selected="item.value === providerId"
+              :class="{ 'is-current': item.value === providerId }"
+              :data-provider="item.value"
+              @click="selectProvider(item.value)"
+            >
+              {{ item.text }}
+            </button>
+          </li>
+        </ul>
+      </div>
+    </VanPopup>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Button as VanButton,
@@ -103,6 +128,7 @@ import {
   CollapseItem as VanCollapseItem,
   Field as VanField,
   NavBar as VanNavBar,
+  Popup as VanPopup,
   Switch as VanSwitch,
   Tag as VanTag,
   showConfirmDialog,
@@ -111,20 +137,32 @@ import {
   showToast,
 } from 'vant'
 import InfoTip from '@/components/common/InfoTip.vue'
+import ModelCombo from '@/components/common/ModelCombo.vue'
 import { summarizeCosts, summarizeQuality, type CostBook, type CostDay, type QualitySummary } from '@/core/cost/summary'
 import { exportBackup, restoreBackup } from '@/db/repos/backup'
 import { listCommentsForDiversity } from '@/db/repos/comments'
 import { listBookCards, listGenerationLogs } from '@/db/repos/library'
 import { platform } from '@/platform'
-import type { Pricing } from '@/core/llm'
+import { PROVIDERS, listModels, providerById, type Pricing } from '@/core/llm'
 import { PRICING_PRESETS, useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
 const settings = useSettingsStore()
 
+const providerId = ref('deepseek')
 const baseUrl = ref('')
 const model = ref('')
 const apiKey = ref('')
+const modelOptions = ref<string[]>([])
+const providerOpen = ref(false)
+const providerList = ref<HTMLElement | null>(null)
+const listing = ref(false)
+const fetchedKey = ref('')
+let hydrating = true
+let keyTimer = 0
+let listQueued = false
+const providerColumns = PROVIDERS.map((item) => ({ text: item.name, value: item.id }))
+const providerName = computed(() => providerById(providerId.value).name)
 const chapterReasoning = ref(true)
 const pricing = ref<Pricing>({ ...PRICING_PRESETS.deepseek })
 const saving = ref(false)
@@ -150,11 +188,13 @@ const pricingLabel = computed(() => {
 
 onMounted(async () => {
   await settings.load()
+  providerId.value = settings.providerId
   baseUrl.value = settings.baseUrl
   model.value = settings.model
   apiKey.value = settings.apiKey
   chapterReasoning.value = settings.chapterReasoning
   pricing.value = { ...settings.pricing }
+  hydrating = false
   const [logs, cards] = await Promise.all([listGenerationLogs(), listBookCards()])
   const titles = Object.fromEntries(cards.map((card) => [card.id, card.title]))
   const summary = summarizeCosts(logs, titles)
@@ -164,6 +204,25 @@ onMounted(async () => {
   const comments = firstBook ? await listCommentsForDiversity(firstBook) : []
   const bookLogs = firstBook ? logs.filter((log) => log.bookId === firstBook) : logs
   quality.value = summarizeQuality(bookLogs, comments)
+})
+
+watch(providerOpen, async (open) => {
+  if (!open) return
+  await nextTick()
+  const list = providerList.value
+  const current = list?.querySelector<HTMLElement>(`[data-provider="${providerId.value}"]`)
+  if (!list || !current) return
+  list.scrollTop = current.offsetTop - list.clientHeight / 2 + current.clientHeight / 2
+})
+
+watch(apiKey, (value) => {
+  if (hydrating) return
+  window.clearTimeout(keyTimer)
+  const next = value.trim()
+  if (!next || next === fetchedKey.value) return
+  keyTimer = window.setTimeout(() => {
+    if (apiKey.value.trim() === next) void onListModels(false)
+  }, 400)
 })
 
 function goBack() {
@@ -185,8 +244,50 @@ function usePreset(name: keyof typeof PRICING_PRESETS) {
   pricing.value = { ...PRICING_PRESETS[name] }
 }
 
+function selectProvider(id: string) {
+  providerId.value = id
+  const preset = providerById(id)
+  if (id !== 'custom') baseUrl.value = preset.baseUrl
+  modelOptions.value = []
+  providerOpen.value = false
+}
+
+async function onListModels(announce = true) {
+  if (listing.value) {
+    listQueued = true
+    return
+  }
+  const key = apiKey.value.trim()
+  if (!key) {
+    if (announce) showToast('请先填写 API Key')
+    return
+  }
+  listing.value = true
+  try {
+    const result = await listModels({
+      baseUrl: baseUrl.value,
+      apiKey: key,
+      protocol: providerById(providerId.value).protocol,
+      fetch: platform.fetch,
+    })
+    fetchedKey.value = key
+    modelOptions.value = result.models
+    if (result.error) showFailToast(result.error)
+    else if (result.models.length === 0) showToast('没有拉到模型，可以直接填写')
+    else if (announce) showSuccessToast(`已获取 ${result.models.length} 个模型`)
+  } finally {
+    listing.value = false
+    if (listQueued) {
+      listQueued = false
+      const next = apiKey.value.trim()
+      if (next && next !== fetchedKey.value) void onListModels(false)
+    }
+  }
+}
+
 function formInput() {
   return {
+    providerId: providerId.value,
     baseUrl: baseUrl.value.trim(),
     model: model.value.trim(),
     apiKey: apiKey.value.trim(),
@@ -384,5 +485,58 @@ async function onTest() {
 
 .settings__file {
   display: none;
+}
+
+.settings__sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+
+.settings__sheet-bar {
+  display: grid;
+  grid-template-columns: 64px 1fr 64px;
+  align-items: center;
+  height: 44px;
+  padding: 0 var(--rs-space-2);
+
+  strong {
+    font-size: var(--rs-text-lg);
+    font-weight: 500;
+    text-align: center;
+  }
+}
+
+.settings__sheet-action {
+  padding: 0 var(--rs-space-2);
+  border: 0;
+  background: transparent;
+  color: var(--rs-muted);
+  font-size: var(--rs-text-md);
+  text-align: left;
+}
+
+.settings__providers {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
+  overflow-y: auto;
+  list-style: none;
+  -webkit-overflow-scrolling: touch;
+
+  button {
+    width: 100%;
+    padding: var(--rs-space-3) var(--rs-space-4);
+    border: 0;
+    background: transparent;
+    color: var(--rs-text);
+    font-size: var(--rs-text-md);
+  }
+
+  .is-current {
+    color: var(--rs-accent);
+    font-weight: 600;
+  }
 }
 </style>

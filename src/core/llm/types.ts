@@ -1,4 +1,5 @@
 import type { ZodType } from 'zod'
+import type { LlmProtocol } from './providers'
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -10,6 +11,8 @@ export interface LlmConfig {
   apiKey: string
   model: string
   fetch: typeof fetch
+  /** 不传时按地址域名识别。自定义地址走 OpenAI 兼容协议。 */
+  protocol?: LlmProtocol
   /** 可重试错误之间的等待。测试里设成 0。 */
   retryDelayMs?: number
 }
@@ -26,7 +29,6 @@ export interface LlmUsage {
 export type ReasoningMode = 'off' | 'low' | 'medium' | 'high'
 
 export interface CallOptions {
-  temperature?: number
   maxTokens?: number
   timeoutMs?: number
   signal?: AbortSignal

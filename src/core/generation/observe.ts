@@ -12,7 +12,6 @@ export async function runObserve(
   signal?: AbortSignal,
 ): Promise<ObserveResult & { usage: LlmUsage }> {
   const { data, usage } = await client.chatJson(buildObservePrompt(ctx), observeResultSchema, {
-    temperature: 0.3,
     maxTokens: observeMaxTokens(ctx.maxPicks),
     timeoutMs: 60_000,
     reasoning: 'off',

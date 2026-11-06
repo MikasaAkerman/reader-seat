@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { z } from 'zod'
-import { createLlmClient, type Pricing } from '@/core/llm'
+import { createLlmClient, providerById, resolveProviderId, type Pricing } from '@/core/llm'
 import { getSetting, setSetting } from '@/db/repos/settings'
 import { platform } from '@/platform'
 
@@ -53,6 +53,7 @@ export function defaultPricingFor(baseUrl: string, model: string): Pricing {
 }
 
 export interface SettingsInput {
+  providerId?: string
   baseUrl: string
   model: string
   apiKey: string
@@ -61,6 +62,7 @@ export interface SettingsInput {
 }
 
 export const useSettingsStore = defineStore('settings', () => {
+  const providerId = ref('deepseek')
   const baseUrl = ref(DEFAULT_BASE_URL)
   const model = ref(DEFAULT_MODEL)
   const apiKey = ref('')
@@ -96,7 +98,8 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function load() {
-    const [savedBase, savedModel, savedKey, savedReasoning, savedPricing] = await Promise.all([
+    const [savedProvider, savedBase, savedModel, savedKey, savedReasoning, savedPricing] = await Promise.all([
+      getSetting<string>('llm.provider'),
       getSetting<string>('llm.baseUrl'),
       getSetting<string>('llm.model'),
       platform.getSecret(API_KEY_SECRET),
@@ -104,6 +107,7 @@ export const useSettingsStore = defineStore('settings', () => {
       getSetting<unknown>('llm.pricing'),
     ])
     baseUrl.value = savedBase || DEFAULT_BASE_URL
+    providerId.value = resolveProviderId(savedProvider, baseUrl.value)
     model.value = savedModel || DEFAULT_MODEL
     apiKey.value = savedKey || ''
     chapterReasoning.value = savedReasoning !== false
@@ -113,11 +117,13 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function save(input: SettingsInput) {
     baseUrl.value = input.baseUrl || DEFAULT_BASE_URL
+    providerId.value = resolveProviderId(input.providerId, baseUrl.value)
     model.value = input.model || DEFAULT_MODEL
     apiKey.value = input.apiKey
     if (input.chapterReasoning !== undefined) chapterReasoning.value = input.chapterReasoning
     if (input.pricing) pricing.value = validPricing(input.pricing) ?? pricing.value
     await Promise.all([
+      setSetting('llm.provider', providerId.value),
       setSetting('llm.baseUrl', baseUrl.value),
       setSetting('llm.model', model.value),
       setSetting('llm.chapterReasoning', chapterReasoning.value),
@@ -132,6 +138,7 @@ export const useSettingsStore = defineStore('settings', () => {
       baseUrl: baseUrl.value,
       apiKey: apiKey.value,
       model: model.value,
+      protocol: providerById(providerId.value).protocol,
       fetch: platform.fetch,
     })
   }
@@ -155,7 +162,7 @@ export const useSettingsStore = defineStore('settings', () => {
           },
         ],
         pingSchema,
-        { temperature: 0, maxTokens: 256, timeoutMs: 30_000 },
+        { maxTokens: 256, timeoutMs: 30_000 },
       )
       jsonOk = data.ok === true
       parts.push(
@@ -173,7 +180,7 @@ export const useSettingsStore = defineStore('settings', () => {
         (delta) => {
           text += delta
         },
-        { temperature: 0, maxTokens: 128, timeoutMs: 30_000 },
+        { maxTokens: 128, timeoutMs: 30_000 },
       )
       streamOk = text.trim().length > 0
       parts.push(
@@ -191,6 +198,7 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   return {
+    providerId,
     baseUrl,
     model,
     apiKey,

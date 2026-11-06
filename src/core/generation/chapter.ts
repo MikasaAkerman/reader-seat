@@ -9,7 +9,6 @@ export async function runChapterTalk(
   reasoning: ReasoningMode = 'low',
 ): Promise<ChapterTalkResult & { usage: LlmUsage }> {
   const { data, usage } = await client.chatJson(buildChapterTalkPrompt(ctx), chapterTalkResultSchema, {
-    temperature: 1,
     maxTokens: reasoning === 'low' ? 3000 : 2000,
     timeoutMs: 120_000,
     reasoning,
